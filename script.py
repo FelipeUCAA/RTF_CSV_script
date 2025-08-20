@@ -150,14 +150,10 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
         chaves = list(dados_gerais.keys()) + list(pontos[0].keys()) + ['<***>']
         texto_pronto = normalizar_chaves_rtf(texto_modelo, chaves)
         
-        # 1. Substitui os dados gerais e do primeiro ponto no cabeçalho
-        print("\nDEBUG: Substituindo dados gerais e do primeiro ponto no cabeçalho...")
+        # 1. Substitui apenas os dados gerais
+        print("\nDEBUG: Substituindo dados gerais...")
         for chave, valor in dados_gerais.items():
             texto_pronto = texto_pronto.replace(chave, str(valor))
-        
-        # Substitui os dados do primeiro ponto na descrição inicial
-        for chave, valor in pontos[0].items():
-            texto_pronto = texto_pronto.replace(chave, str(valor), 1)
 
         # 2. Encontra o bloco de repetição e o texto de fechamento
         padrao_bloco = r"(?s)<\*\*\*>\s*(.*?)\s*<\*\*\*>."
@@ -173,26 +169,26 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
         blocos_gerados = []
         print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 1} blocos...")
 
+        # 3. Monta os blocos ponto a ponto
         for i, ponto_atual in enumerate(pontos[:-1]):
             print(f"DEBUG: Processando ponto {ponto_atual.get('<PONTO>')}. Confrontando com {pontos[i+1].get('<PONTO>')}")
-            
+
             bloco_formatado = bloco_base
-            
+
             # Substitui os dados do ponto atual
             for chave, valor in ponto_atual.items():
                 bloco_formatado = bloco_formatado.replace(chave, str(valor))
-            
-            # Substitui os dados do próximo ponto nos marcadores restantes do bloco
-            bloco_formatado = bloco_formatado.replace("<PONTO>", pontos[i + 1].get('<PONTO>', ''), 1)
-            bloco_formatado = bloco_formatado.replace("<UTMY>", pontos[i + 1].get('<UTMY>', ''), 1)
-            bloco_formatado = bloco_formatado.replace("<UTMX>", pontos[i + 1].get('<UTMX>', ''), 1)
-            
+
+            # Substitui os dados do próximo ponto (encadeamento do memorial)
+            for chave in ["<PONTO>", "<UTMX>", "<UTMY>", "<CONFRONTANTE>", "<AZIMUTE>", "<DISTANCIA>", "<RUMO>"]:
+                if chave in bloco_formatado:
+                    bloco_formatado = bloco_formatado.replace(chave, pontos[i+1].get(chave, ""), 1)
+
             blocos_gerados.append(bloco_formatado)
         
         texto_depois = texto_pronto[match_bloco.end():]
         
-        # Trata o fechamento do perímetro, que está no texto_depois
-                # Trata o fechamento do perímetro, que está no texto_depois
+        # 4. Trata o fechamento do perímetro
         if pontos:
             ultimo_ponto = pontos[-1]
             primeiro_ponto = pontos[0]
@@ -207,20 +203,21 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
                 "deste segue confrontando com a propriedade de <CONFRONTANTE>, com azimute de <AZIMUTE> por uma  distância de <DISTANCIA>m, até o ponto <PONTO>, onde teve inicio essa descrição.",
                 fechamento_texto
             )
-            # Substitui as variáveis de fechamento
+            # Substitui variáveis de fechamento
             for chave, valor in ultimo_ponto.items():
                 texto_depois = texto_depois.replace(chave, str(valor))
             texto_depois = texto_depois.replace("<PONTO>", primeiro_ponto.get('<PONTO>', ''))
 
-
+        # 5. Monta o texto final
         texto_final = texto_pronto[:match_bloco.start()] + "".join(blocos_gerados) + texto_depois
         
-        with open(saida_rtf, 'w', encoding='windows-1252') as f:
+        with open(saida_rtf, 'w', encoding='windows-1252', errors='ignore') as f:
             f.write(texto_final)
         print(f"DEBUG: Arquivo final salvo em: {saida_rtf}")
 
     except Exception as e:
         raise Exception(f"Erro ao processar o RTF. Detalhes: {e}")
+
 
 def selecionar_arquivos_e_processar():
     """
