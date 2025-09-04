@@ -1,5 +1,5 @@
 ('C:\\Users\\lipin\\OneDrive\\Área de '
- 'Trabalho\\Projetos\\RTF_CSV_script\\build\\script\\PYZ-00.pyz',
+ 'Trabalho\\Projetos\\RTF_CSV_script\\build\\gerador_rtf\\PYZ-00.pyz',
  [('_compat_pickle',
    'C:\\Users\\lipin\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\_compat_pickle.py',
    'PYMODULE'),

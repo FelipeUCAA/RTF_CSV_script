@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import argparse
+import sys
 
 # --- Funções de Leitura de Arquivos com Fallback de Codificação ---
 
@@ -159,19 +161,29 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
         padrao_bloco = r"(?s)<\*\*\*>\s*(.*?)\s*<\*\*\*>."
         match_bloco = re.search(padrao_bloco, texto_pronto)
 
-        if not match_bloco or len(pontos) < 2:
+        if not match_bloco or len(pontos) < 3:
             print("\nDEBUG: Bloco de repetição não encontrado ou número de pontos insuficiente. Processando como arquivo simples.")
             with open(saida_rtf, 'w', encoding='windows-1252') as f:
                 f.write(texto_pronto)
             return
 
+        # --- ABERTURA: substitui variáveis do primeiro ponto (M01) no texto antes do bloco ---
+        texto_antes = texto_pronto[:match_bloco.start()]
+        primeiro_ponto = pontos[0]
+        for chave, valor in primeiro_ponto.items():
+            texto_antes = texto_antes.replace(chave, str(valor))
+        # --------------------------------------------------------------------------------------
+
         bloco_base = match_bloco.group(1).replace('<***>', '')
         blocos_gerados = []
-        print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 1} blocos...")
+        print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 2} blocos...")
 
-        # 3. Monta os blocos ponto a ponto
-        for i, ponto_atual in enumerate(pontos[:-1]):
-            print(f"DEBUG: Processando ponto {ponto_atual.get('<PONTO>')}. Confrontando com {pontos[i+1].get('<PONTO>')}")
+        # 3. Loop vai do segundo ponto (M02) até o penúltimo
+        for i in range(1, len(pontos) - 1):
+            ponto_atual = pontos[i]
+            proximo_ponto = pontos[i+1]
+
+            print(f"DEBUG: Processando ponto {ponto_atual.get('<PONTO>')} confrontando com {proximo_ponto.get('<PONTO>')}")
 
             bloco_formatado = bloco_base
 
@@ -179,37 +191,47 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
             for chave, valor in ponto_atual.items():
                 bloco_formatado = bloco_formatado.replace(chave, str(valor))
 
-            # Substitui os dados do próximo ponto (encadeamento do memorial)
+            # Substitui os dados do próximo ponto
             for chave in ["<PONTO>", "<UTMX>", "<UTMY>", "<CONFRONTANTE>", "<AZIMUTE>", "<DISTANCIA>", "<RUMO>"]:
                 if chave in bloco_formatado:
-                    bloco_formatado = bloco_formatado.replace(chave, pontos[i+1].get(chave, ""), 1)
+                    bloco_formatado = bloco_formatado.replace(chave, proximo_ponto.get(chave, ""), 1)
 
             blocos_gerados.append(bloco_formatado)
         
         texto_depois = texto_pronto[match_bloco.end():]
         
-        # 4. Trata o fechamento do perímetro
-        if pontos:
-            ultimo_ponto = pontos[-1]
-            primeiro_ponto = pontos[0]
-            fechamento_texto = (
-                f"deste segue confrontando com a propriedade de {ultimo_ponto.get('<CONFRONTANTE>', '')}, "
-                f"com azimute de {ultimo_ponto.get('<AZIMUTE>', '')} por uma distância de {ultimo_ponto.get('<DISTANCIA>', '')}m, "
-                f"até o ponto {primeiro_ponto.get('<PONTO>', '')}, onde teve inicio essa descrição."
-            )
+                # 4. FECHAMENTO: último ponto voltando para M01
+        ultimo_ponto = pontos[-1]
+        primeiro_ponto = pontos[0]
 
-            print("DEBUG: Gerando texto de fechamento do perímetro.")
-            texto_depois = texto_depois.replace(
-                "deste segue confrontando com a propriedade de <CONFRONTANTE>, com azimute de <AZIMUTE> por uma  distância de <DISTANCIA>m, até o ponto <PONTO>, onde teve inicio essa descrição.",
-                fechamento_texto
-            )
-            # Substitui variáveis de fechamento
-            for chave, valor in ultimo_ponto.items():
-                texto_depois = texto_depois.replace(chave, str(valor))
-            texto_depois = texto_depois.replace("<PONTO>", primeiro_ponto.get('<PONTO>', ''))
+        fechamento_texto = (
+            f"deste segue confrontando com a propriedade de {ultimo_ponto.get('<CONFRONTANTE>', '')}, "
+            f"com azimute de {ultimo_ponto.get('<AZIMUTE>', '')} por uma distância de {ultimo_ponto.get('<DISTANCIA>', '')}m, "
+            f"até o ponto {primeiro_ponto.get('<PONTO>', '')}, onde teve inicio essa descrição."
+        )
+
+        print("DEBUG: Gerando texto de fechamento do perímetro.")
+        texto_depois_novo, subs_feitas = re.subn(
+            r"deste segue.*?essa descrição\.",
+            fechamento_texto,
+            texto_depois,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+
+        if subs_feitas == 0:
+            print("DEBUG: Nenhuma frase de fechamento encontrada no modelo. Fechamento será adicionado ao final.")
+            texto_depois = texto_depois.strip() + " " + fechamento_texto
+        else:
+            texto_depois = texto_depois_novo
+
+        # 🔥 Forçar substituição de variáveis ainda presentes no fechamento
+        for chave, valor in ultimo_ponto.items():
+            texto_depois = texto_depois.replace(chave, str(valor))
+        texto_depois = texto_depois.replace("<PONTO>", primeiro_ponto.get("<PONTO>", ""))
+
 
         # 5. Monta o texto final
-        texto_final = texto_pronto[:match_bloco.start()] + "".join(blocos_gerados) + texto_depois
+        texto_final = texto_antes + "".join(blocos_gerados) + texto_depois
         
         with open(saida_rtf, 'w', encoding='windows-1252', errors='ignore') as f:
             f.write(texto_final)
@@ -271,8 +293,25 @@ def selecionar_arquivos_e_processar():
         messagebox.showinfo("Sucesso", f"Memorial gerado com sucesso:\n{saida_rtf}")
     except Exception as e:
         print(f"ERRO: {e}")
-        messagebox.showerror("Erro", f"Erro ao gerar arquivo:\n{e}")
-        
+        messagebox.showerror("Erro", f"Erro ao gerar arquivo:\n{e}") 
+
+def main():
+    parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo RTF")
+    parser.add_argument("--modelo", help="Caminho do RTF modelo")
+    parser.add_argument("--csv_pontos", help="Caminho do CSV com pontos")
+    parser.add_argument("--csv_gerais", help="Caminho do CSV com dados gerais")
+    parser.add_argument("--saida", help="Caminho para salvar o RTF final")
+    args = parser.parse_args()
+
+    if args.modelo and args.csv_pontos and args.csv_gerais and args.saida:
+        dados_gerais = carregar_dados_gerais(args.csv_gerais)
+        pontos = carregar_pontos(args.csv_pontos)
+        if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
+            dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
+        processar_rtf(args.modelo, dados_gerais, pontos, args.saida)
+        print(f"Memorial gerado com sucesso: {args.saida}")
+    else:
+        selecionar_arquivos_e_processar()
 
 if __name__ == "__main__":
-    selecionar_arquivos_e_processar()
+    main()
