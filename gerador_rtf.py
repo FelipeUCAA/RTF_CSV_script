@@ -178,37 +178,44 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
         blocos_gerados = []
         print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 2} blocos...")
 
-        # 3. Loop vai do segundo ponto (M02) até o penúltimo
+        # 3. Loop vai do segundo ponto (M02) até o penúltimo (não fecha aqui!)
         for i in range(1, len(pontos) - 1):
             ponto_atual = pontos[i]
             proximo_ponto = pontos[i+1]
+            numero_confronto = i  # começa do 1 no M02
 
-            print(f"DEBUG: Processando ponto {ponto_atual.get('<PONTO>')} confrontando com {proximo_ponto.get('<PONTO>')}")
+            print(f"DEBUG: Confronto {numero_confronto} -> Ponto {ponto_atual.get('<PONTO>')} até {proximo_ponto.get('<PONTO>')}")
 
             bloco_formatado = bloco_base
 
-            # Substitui os dados do ponto atual
+            # Substitui dados do ponto atual
             for chave, valor in ponto_atual.items():
                 bloco_formatado = bloco_formatado.replace(chave, str(valor))
 
-            # Substitui os dados do próximo ponto
+            # Substitui dados do próximo ponto
             for chave in ["<PONTO>", "<UTMX>", "<UTMY>", "<CONFRONTANTE>", "<AZIMUTE>", "<DISTANCIA>", "<RUMO>"]:
                 if chave in bloco_formatado:
                     bloco_formatado = bloco_formatado.replace(chave, proximo_ponto.get(chave, ""), 1)
 
+            # Numeração do confronto
+            bloco_formatado = bloco_formatado.replace("<CONFRO>", f"Confronto {numero_confronto}")
+
             blocos_gerados.append(bloco_formatado)
-        
+
         texto_depois = texto_pronto[match_bloco.end():]
-        
-                # 4. FECHAMENTO: último ponto voltando para M01
+
+        # 4. FECHAMENTO: último ponto voltando para M01
         ultimo_ponto = pontos[-1]
         primeiro_ponto = pontos[0]
+        numero_confronto = len(pontos) - 1
 
         fechamento_texto = (
-            f"deste segue confrontando com a propriedade de {ultimo_ponto.get('<CONFRONTANTE>', '')}, "
+            f"Confronto {numero_confronto}: deste segue confrontando com a propriedade de {ultimo_ponto.get('<CONFRONTANTE>', '')}, "
             f"com azimute de {ultimo_ponto.get('<AZIMUTE>', '')} por uma distância de {ultimo_ponto.get('<DISTANCIA>', '')}m, "
-            f"até o ponto {primeiro_ponto.get('<PONTO>', '')}, onde teve inicio essa descrição."
+            f"até o ponto {primeiro_ponto.get('<PONTO>', '')}, onde teve início essa descrição."
         )
+
+
 
         print("DEBUG: Gerando texto de fechamento do perímetro.")
         texto_depois_novo, subs_feitas = re.subn(
@@ -224,7 +231,7 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
         else:
             texto_depois = texto_depois_novo
 
-        # 🔥 Forçar substituição de variáveis ainda presentes no fechamento
+        #Forçar substituição de variáveis ainda presentes no fechamento
         for chave, valor in ultimo_ponto.items():
             texto_depois = texto_depois.replace(chave, str(valor))
         texto_depois = texto_depois.replace("<PONTO>", primeiro_ponto.get("<PONTO>", ""))
@@ -297,21 +304,45 @@ def selecionar_arquivos_e_processar():
 
 def main():
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo RTF")
-    parser.add_argument("--modelo", help="Caminho do RTF modelo")
+    parser.add_argument("modelo", nargs="?", help="Caminho do RTF modelo")
+    parser.add_argument("base", nargs="?", help="Caminho base (sem extensão, ex: D:\\TESTE-MOD)")
     parser.add_argument("--csv_pontos", help="Caminho do CSV com pontos")
     parser.add_argument("--csv_gerais", help="Caminho do CSV com dados gerais")
     parser.add_argument("--saida", help="Caminho para salvar o RTF final")
     args = parser.parse_args()
 
-    if args.modelo and args.csv_pontos and args.csv_gerais and args.saida:
+    # --- MODO SIMPLIFICADO ---
+    if args.modelo and args.base and not (args.csv_pontos or args.csv_gerais or args.saida):
+        csv_gerais = args.base + "1.CSV"
+        csv_pontos = args.base + "2.CSV"
+        saida_rtf = args.base + ".RTF"
+
+        print(f"--- Arquivos detectados ---")
+        print(f"Modelo RTF : {args.modelo}")
+        print(f"CSV Gerais : {csv_gerais}")
+        print(f"CSV Pontos : {csv_pontos}")
+        print(f"Saída RTF  : {saida_rtf}")
+
+        dados_gerais = carregar_dados_gerais(csv_gerais)
+        pontos = carregar_pontos(csv_pontos)
+        if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
+            dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
+        processar_rtf(args.modelo, dados_gerais, pontos, saida_rtf)
+        print(f"\n✅ Memorial gerado com sucesso: {saida_rtf}")
+
+    # --- MODO COMPLETO (flags antigas) ---
+    elif args.modelo and args.csv_pontos and args.csv_gerais and args.saida:
         dados_gerais = carregar_dados_gerais(args.csv_gerais)
         pontos = carregar_pontos(args.csv_pontos)
         if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
             dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
         processar_rtf(args.modelo, dados_gerais, pontos, args.saida)
-        print(f"Memorial gerado com sucesso: {args.saida}")
+        print(f"\n✅ Memorial gerado com sucesso: {args.saida}")
+
+    # --- MODO GUI (fallback) ---
     else:
         selecionar_arquivos_e_processar()
+
 
 if __name__ == "__main__":
     main()
