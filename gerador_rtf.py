@@ -118,6 +118,11 @@ def carregar_pontos(caminho_csv):
     except Exception as e:
         raise ValueError(f"Erro ao carregar os pontos do CSV. Detalhes: {e}")
     
+    # Adicionando a correção para remover o último ponto duplicado, se for o caso
+    if len(pontos) > 1 and pontos[0].get('<PONTO>') == pontos[-1].get('<PONTO>'):
+        print("DEBUG: Ponto final duplicado encontrado. Removendo da lista de pontos para o loop de repetição.")
+        pontos.pop()
+
     return pontos
     
 def normalizar_chaves_rtf(texto_rtf, chaves):
@@ -161,53 +166,64 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
         padrao_bloco = r"(?s)<\*\*\*>\s*(.*?)\s*<\*\*\*>."
         match_bloco = re.search(padrao_bloco, texto_pronto)
 
-        if not match_bloco or len(pontos) < 3:
+        if not match_bloco or len(pontos) < 2:
             print("\nDEBUG: Bloco de repetição não encontrado ou número de pontos insuficiente. Processando como arquivo simples.")
             with open(saida_rtf, 'w', encoding='windows-1252') as f:
                 f.write(texto_pronto)
             return
 
-        # --- ABERTURA: substitui variáveis do primeiro ponto (M01) no texto antes do bloco ---
+        # Separar o texto em partes
         texto_antes = texto_pronto[:match_bloco.start()]
+        bloco_base = match_bloco.group(1).replace('<***>', '')
+        texto_depois = texto_pronto[match_bloco.end():]
+        blocos_gerados = []
+        
+        # --- ABERTURA: substitui variáveis do primeiro ponto (M01) no texto antes do bloco ---
         primeiro_ponto = pontos[0]
         for chave, valor in primeiro_ponto.items():
-            texto_antes = texto_antes.replace(chave, str(valor))
+            if chave in texto_antes:
+                texto_antes = texto_antes.replace(chave, str(valor))
         # --------------------------------------------------------------------------------------
 
-        bloco_base = match_bloco.group(1).replace('<***>', '')
-        blocos_gerados = []
-        print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 2} blocos...")
+        # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO ---
+        print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 1} blocos...")
+        
+        # O loop processa pares de pontos (ponto_atual, proximo_ponto)
+        # O range vai de 0 até o penúltimo índice da lista de pontos, garantindo a
+        # geração do parágrafo até o último ponto.
+        for idx in range(len(pontos) - 1):
+            ponto_atual = pontos[idx]
+            proximo_ponto = pontos[idx + 1]
+            numero_confronto = idx + 1
 
-        # 3. Loop vai do segundo ponto (M02) até o penúltimo (não fecha aqui!)
-        for i in range(1, len(pontos) - 1):
-            ponto_atual = pontos[i]
-            proximo_ponto = pontos[i+1]
-            numero_confronto = i  # começa do 1 no M02
-
-            print(f"DEBUG: Confronto {numero_confronto} -> Ponto {ponto_atual.get('<PONTO>')} até {proximo_ponto.get('<PONTO>')}")
+            print(f"DEBUG: Confronto {numero_confronto} -> do ponto {ponto_atual.get('<PONTO>')}, confrontando com {ponto_atual.get('<CONFRONTANTE>')}, até o ponto {proximo_ponto.get('<PONTO>')}")
 
             bloco_formatado = bloco_base
 
-            # Substitui dados do ponto atual
-            for chave, valor in ponto_atual.items():
-                bloco_formatado = bloco_formatado.replace(chave, str(valor))
+            # CORREÇÃO: Cria um dicionário com os dados do ponto_atual e, em seguida,
+            # adiciona ou sobrescreve os dados do proximo_ponto.
+            dados_paragrafo = ponto_atual.copy()
+            dados_paragrafo.update({
+                '<PONTO>': proximo_ponto.get('<PONTO>', ''),
+                '<UTMX>': proximo_ponto.get('<UTMX>', ''),
+                '<UTMY>': proximo_ponto.get('<UTMY>', ''),
+            })
 
-            # Substitui dados do próximo ponto
-            for chave in ["<PONTO>", "<UTMX>", "<UTMY>", "<CONFRONTANTE>", "<AZIMUTE>", "<DISTANCIA>", "<RUMO>"]:
+            # Substitui todas as chaves no bloco com os dados combinados
+            for chave, valor in dados_paragrafo.items():
                 if chave in bloco_formatado:
-                    bloco_formatado = bloco_formatado.replace(chave, proximo_ponto.get(chave, ""), 1)
-
-            # Numeração do confronto
-            bloco_formatado = bloco_formatado.replace("<CONFRO>", f"Confronto {numero_confronto}")
+                    bloco_formatado = bloco_formatado.replace(chave, str(valor))
+            
+            # Substitui a numeração do confronto
+            if '<CONFRO>' in bloco_formatado:
+                bloco_formatado = bloco_formatado.replace("<CONFRO>", f"Confronto {numero_confronto}")
 
             blocos_gerados.append(bloco_formatado)
 
-        texto_depois = texto_pronto[match_bloco.end():]
-
-        # 4. FECHAMENTO: último ponto voltando para M01
+        # --- FECHAMENTO: último ponto voltando para M01 ---
         ultimo_ponto = pontos[-1]
         primeiro_ponto = pontos[0]
-        numero_confronto = len(pontos) - 1
+        numero_confronto = len(pontos) # último confronto
 
         fechamento_texto = (
             f"Confronto {numero_confronto}: deste segue confrontando com a propriedade de {ultimo_ponto.get('<CONFRONTANTE>', '')}, "
@@ -215,11 +231,11 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
             f"até o ponto {primeiro_ponto.get('<PONTO>', '')}, onde teve início essa descrição."
         )
 
-
-
         print("DEBUG: Gerando texto de fechamento do perímetro.")
-        texto_depois_novo, subs_feitas = re.subn(
-            r"deste segue.*?essa descrição\.",
+        # Usamos uma regex para encontrar e substituir a frase de fechamento no modelo, se existir
+        padrao_fechamento = r"Confronto\s*\d+:\s*deste\s*segue.*?essa\s*descrição\."
+        texto_depois_final, subs_feitas = re.subn(
+            padrao_fechamento,
             fechamento_texto,
             texto_depois,
             flags=re.DOTALL | re.IGNORECASE
@@ -227,18 +243,15 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
 
         if subs_feitas == 0:
             print("DEBUG: Nenhuma frase de fechamento encontrada no modelo. Fechamento será adicionado ao final.")
-            texto_depois = texto_depois.strip() + " " + fechamento_texto
-        else:
-            texto_depois = texto_depois_novo
-
-        #Forçar substituição de variáveis ainda presentes no fechamento
+            texto_depois_final = texto_depois.strip() + " " + fechamento_texto
+        
+        # Forçar substituição de variáveis ainda presentes no fechamento, se necessário
+        texto_depois_final = texto_depois_final.replace('<PONTO>', primeiro_ponto.get('<PONTO>', ''))
         for chave, valor in ultimo_ponto.items():
-            texto_depois = texto_depois.replace(chave, str(valor))
-        texto_depois = texto_depois.replace("<PONTO>", primeiro_ponto.get("<PONTO>", ""))
-
-
+             texto_depois_final = texto_depois_final.replace(chave, str(valor))
+             
         # 5. Monta o texto final
-        texto_final = texto_antes + "".join(blocos_gerados) + texto_depois
+        texto_final = texto_antes + "".join(blocos_gerados) + texto_depois_final
         
         with open(saida_rtf, 'w', encoding='windows-1252', errors='ignore') as f:
             f.write(texto_final)
@@ -246,7 +259,6 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
 
     except Exception as e:
         raise Exception(f"Erro ao processar o RTF. Detalhes: {e}")
-
 
 def selecionar_arquivos_e_processar():
     """
@@ -281,17 +293,17 @@ def selecionar_arquivos_e_processar():
         dados_gerais = carregar_dados_gerais(csv_gerais)
         pontos = carregar_pontos(csv_pontos)
         if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
-            dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]      
+            dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
         print("\n--- Verificação de dados carregados ---")
         if dados_gerais:
             print("Dados gerais carregados com sucesso.")
-            print(f"  Número de itens: {len(dados_gerais)}")
+            print(f"  Número de itens: {len(dados_gerais)}")
         else:
             raise ValueError("Não foi possível carregar os dados gerais.")
         
         if pontos:
             print("Pontos carregados com sucesso.")
-            print(f"  Número de pontos: {len(pontos)}")
+            print(f"  Número de pontos: {len(pontos)}")
         else:
             raise ValueError("Não foi possível carregar os pontos.")
         
@@ -300,7 +312,7 @@ def selecionar_arquivos_e_processar():
         messagebox.showinfo("Sucesso", f"Memorial gerado com sucesso:\n{saida_rtf}")
     except Exception as e:
         print(f"ERRO: {e}")
-        messagebox.showerror("Erro", f"Erro ao gerar arquivo:\n{e}") 
+        messagebox.showerror("Erro", f"Erro ao gerar arquivo:\n{e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo RTF")
