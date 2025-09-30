@@ -1,40 +1,67 @@
-📝 RTF_CSV_script
-**A lightweight Python utility for converting RTF (Rich Text Format) documents into clean CSV files. Ideal for automating data extraction from formatted text files, especially in academic or administrative workflows.**
+DOCX/RTF Descriptive Memorial Generator
+A robust Python script designed to automate the creation of Descriptive Memorial documents from a Microsoft Word template (.docx, .rtf) and structured tabular data (.csv) containing point information and general details.
 
-🚀 Features
-**Parses RTF files and extracts structured content**
+The tool is designed to be executed via the command line, making it ideal for integration with surveying systems like TopoCAD 2000.
 
-**Converts extracted data into CSV format**
+🚀 How to Use (Via Command Line)
+The standard execution of the script requires you to pass the file path of the document template and the base path of the data files (CSVs) as arguments.
 
-**Simple and customizable script for batch processing**
+Prerequisites
+No Python installation or external library installation is required for the end-user if you are distributing a bundled executable (.exe).
 
-**Minimal dependencies for easy deployment**
+Execution Syntax (Recommended)
+Run the script (e.g., memorial_generator.exe or memorial_generator.py) followed by the two required arguments:
 
-📂 Repository Structure
-Código
-RTF_CSV_script/
-├── build/           # Build artifacts
-├── dist/            # Distribution files
-├── script.py        # Main conversion script
-├── script.spec      # PyInstaller spec file
-├── LICENSE          # Apache 2.0 License
+Bash
 
-🛠️ Installation
-Clone the repository:
-bash
-git clone https://github.com/FelipeUCAA/RTF_CSV_script.git
-cd RTF_CSV_script
+# Executing the script via console (TopoCAD, Prompt, etc.)
+my_script.exe <PATH_TO_TEMPLATE> <CSV_BASE_PATH>
+Practical Example:
 
-Install required packages (if any):
-bash
-pip install -r requirements.txt
+If your files are:
 
-📈 Usage
-Run the script with your RTF file:
+Template: C:\Projects\Template.docx
 
-bash
-python script.py input_file.rtf output_file.csv
-You can modify script.py to suit your specific formatting needs or integrate it into a larger pipeline.
+General Data: C:\Projects\Data_1.csv
 
-📄 License
-**This project is licensed under the Apache 2.0 License**
+Point Data: C:\Projects\Data_2.csv
+
+You should use the path to the template and the common path prefix of the CSV files (C:\Projects\Data):
+
+Bash
+
+my_script.exe C:\Projects\Template.docx C:\Projects\Data
+The script will automatically look for C:\Projects\Data1.csv and C:\Projects\Data2.csv, and save the resulting document as C:\Projects\Data.docx.
+
+📂 Required Input File Structure
+The script expects your input data to be organized into three main files:
+
+1. Document Template (.docx or .rtf)
+This file must contain the placeholders (substitution markers) in <KEY> format:
+
+Data Type	Placeholder Example	Usage
+General	<IMOVEL>, <PERIMETRO>, <MUNICIPIO>, <RESPONSAVEL>	Header and Footer information.
+Point Data	<PONTO>, <AZIMUTE>, <DISTANCIA>, <CONFRONTANTE>, <UTMX>, <UTMY>	Repetition Block, Opening, and Closing description.
+Repetition Block	<***>	Marks the start and end of the text block that will be repeated for each segment of the perimeter.
+
+Exportar para Sheets
+2. General Data CSV (<CSV_BASE_PATH>1.csv)
+Format: <KEY>;<VALUE>
+
+Column A (Key)	Column B (Value)
+<IMOVEL>	SITIO ALEGRIA
+<AREAM2>	19,7425
+<DATA>	23/07/2025
+
+Exportar para Sheets
+3. Point Data CSV (<CSV_BASE_PATH>2.csv)
+This file must contain the header row (<PONTO>;<DISTANCIA>;<AZIMUTE>;...) followed by the list of vertices. The script automatically manages the order of the confrontations.
+
+🛠️ Technical Details
+Block Processing: The section between <***> and <***> is repeated for each perimeter segment (N-1 repetitions, where N is the total number of points).
+
+Formatting (Bold): The script implements manual reconstruction of runs to ensure that point data (<PONTO>) is preserved in bold across all generated paragraphs (Opening, Repetition Blocks, and Closing), provided the original placeholder in the model was formatted as such.
+
+Repeated Confrontants: The logic automatically detects repeated confronting properties, replacing the name with the expression "o mesmo" (the same).
+
+Final Output: The final document ends after the last successfully generated repetition block.
