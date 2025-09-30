@@ -17,35 +17,28 @@ class MockDocument:
 try:
     from docx import Document
     from docx.shared import Inches
+    # Importações adicionais para a lógica de reconstrução
+    from docx.text.paragraph import Paragraph
+    from docx.text.run import Run
 except ImportError:
     Document = MockDocument
     print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX não funcionará.")
 
 
-# --- Funções de Leitura de Arquivos com Fallback de Codificação ---
-
+# --- Funções de Leitura de Arquivos com Fallback de Codificação (inalteradas) ---
 def ler_arquivo_com_fallback(caminho):
-    """
-    Tenta ler o arquivo de forma segura, com várias codificações.
-    """
     if not Path(caminho).exists():
         raise FileNotFoundError(f"O arquivo não foi encontrado no caminho: {caminho}")
 
     for enc in ['utf-8-sig', 'utf-8', 'windows-1252', 'latin-1']:
         try:
-            # Esta função só é usada para ler CSVs (texto), então o 'read_text' está correto aqui.
             return Path(caminho).read_text(encoding=enc)
         except UnicodeDecodeError:
             continue
     raise UnicodeDecodeError(f"Não foi possível ler o arquivo {caminho} com codificações conhecidas.")
 
-# --- Funções de Carregamento de Dados (sem alteração) ---
-
+# --- Funções de Carregamento de Dados (inalteradas) ---
 def carregar_dados_gerais(caminho_csv):
-    """
-    Carrega dados gerais de um CSV.
-    Assume o formato <CHAVE>;<VALOR>.
-    """
     dados_gerais = {}
     try:
         print(f"DEBUG: Carregando dados gerais de: {caminho_csv}")
@@ -85,10 +78,6 @@ def carregar_dados_gerais(caminho_csv):
     return dados_gerais
 
 def carregar_pontos(caminho_csv):
-    """
-    Carrega a lista de pontos de um CSV.
-    Assume que os dados começam após a linha de cabeçalho '<PONTO>;...'.
-    """
     pontos = []
     lendo_pontos = False
     try:
@@ -134,7 +123,6 @@ def carregar_pontos(caminho_csv):
     except Exception as e:
         raise ValueError(f"Erro ao carregar os pontos do CSV. Detalhes: {e}")
     
-    # Adicionando a correção para remover o último ponto duplicado, se for o caso
     if len(pontos) > 1 and pontos[0].get('<PONTO>') == pontos[-1].get('<PONTO>'):
         print("DEBUG: Ponto final duplicado encontrado. Removendo da lista de pontos para o loop de repetição.")
         pontos.pop()
@@ -142,12 +130,7 @@ def carregar_pontos(caminho_csv):
     return pontos
     
 def normalizar_chaves_rtf(texto_rtf, chaves):
-    """
-    Remove formatação RTF das chaves como <IMOVEL> que podem estar salvas como <\f0 I\f1 M\f2 O...>.
-    USADO APENAS PARA ARQUIVOS RTF.
-    """
     for chave in chaves:
-        # Constrói padrão que aceita qualquer coisa entre os caracteres da chave
         padrao = ''
         for letra in chave:
             padrao += re.escape(letra) + r'(?:\\[a-z]+\d* ?|[\s{}])*?'
@@ -156,24 +139,18 @@ def normalizar_chaves_rtf(texto_rtf, chaves):
     return texto_rtf
 
 def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
-    """
-    Substitui um placeholder em um parágrafo preservando a formatação do DOCX.
-    Esta função manipula as 'runs' (blocos formatados) diretamente.
-    """
     if placeholder not in paragraph.text:
         return
 
-    # 1. Encontra o índice da primeira run que contém o placeholder
     text_before = ''
     start_run_index = -1
-    start_offset = -1 # Posição inicial do placeholder na run de início
+    start_offset = -1
     
     current_char_count = 0
     for i, run in enumerate(paragraph.runs):
         run_text = run.text
         run_len = len(run_text)
         
-        # Se o placeholder começa ou passa por esta run
         if current_char_count + run_len > paragraph.text.find(placeholder) and start_run_index == -1:
             start_run_index = i
             start_pos_in_para = paragraph.text.find(placeholder)
@@ -185,9 +162,8 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
     if start_run_index == -1:
         return
 
-    # 2. Encontra o índice da última run afetada
     end_run_index = start_run_index
-    end_offset = -1 # Posição final do placeholder na run de término
+    end_offset = -1
     char_count = current_char_count
     
     placeholder_end_pos = paragraph.text.find(placeholder) + len(placeholder)
@@ -209,28 +185,19 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
     start_run = paragraph.runs[start_run_index]
     end_run = paragraph.runs[end_run_index]
     
-    # 3. Extrai prefixo e sufixo
     prefix_text = start_run.text[:start_offset]
     suffix_text = end_run.text[end_offset:]
     
-    # 4. Modifica a run de início e limpa as runs intermediárias/finais
-    
     if start_run_index == end_run_index:
-        # Se o placeholder estiver contido em uma única run
         start_run.text = prefix_text + str(replacement) + suffix_text
     else:
-        # Modifica a run de início
         start_run.text = prefix_text + str(replacement)
         
-        # Limpa as runs intermediárias
         for i in range(start_run_index + 1, end_run_index):
             paragraph.runs[i].clear()
             
-        # Modifica a run de término
         end_run.text = suffix_text
         
-        # Limpa runs vazias, pois a limpeza pode deixar runs vazias que podem causar um caractere
-        # indesejado (geralmente um espaço) no documento final.
         for i in range(len(paragraph.runs) - 1, -1, -1):
             if not paragraph.runs[i].text:
                 p = paragraph._element
@@ -239,20 +206,13 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
 
 
 def substituir_texto_em_docx(documento, dados_substituicao):
-    """
-    Substitui placeholders em parágrafos e células de tabela de um documento DOCX,
-    preservando a formatação.
-    """
     def substituir_em_estrutura(estrutura):
-        # A estrutura pode ser o documento (para parágrafos no corpo) ou uma célula (para parágrafos dentro dela)
         for paragrafo in estrutura.paragraphs:
             for chave, valor in dados_substituicao.items():
                 replace_placeholder_in_paragraph(paragrafo, chave, str(valor))
     
-    # Substituir em parágrafos no corpo
     substituir_em_estrutura(documento)
 
-    # Substituir em tabelas
     for tabela in documento.tables:
         for linha in tabela.rows:
             for celula in linha.cells:
@@ -277,7 +237,7 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
             # --- Lógica para DOCX ---
             
             if Document is MockDocument:
-                 raise Exception("A biblioteca 'python-docx' não foi encontrada. Instale-a para processar arquivos DOCX (pip install python-docx).")
+                raise Exception("A biblioteca 'python-docx' não foi encontrada. Instale-a para processar arquivos DOCX (pip install python-docx).")
 
             print(f"DEBUG: Iniciando processamento do DOCX: {caminho_modelo}")
             
@@ -306,23 +266,18 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
             
             # Encontra o marcador de FIM
             if start_index != -1:
-                # Procura pelo fechamento em parágrafos subsequentes, ou no próprio parágrafo se for um bloco de linha única
                 for i in range(start_index, len(documento.paragraphs)):
                     p = documento.paragraphs[i]
-                    # Verifica se o fechamento está presente (pode ser o mesmo parágrafo de início)
                     if p.text.count('<***>') >= 2 or (i > start_index and '<***>' in p.text):
                         end_index = i
                         break
 
-            
-            # VERIFICAÇÃO DE BLOCO E PONTOS (AQUI OCORRIA O ERRO 'NoneType')
+            # VERIFICAÇÃO DE BLOCO E PONTOS
             if start_index == -1 or end_index == -1 or len(pontos) < 2:
+                # ... (lógica de fallback inalterada)
                 print("\nDEBUG: Bloco de repetição não encontrado ou número de pontos insuficiente. Processando como arquivo simples.")
-                
-                # Se o marcador existir (só o início), removemos para evitar que o texto do marcador apareça no final
                 if paragrafo_bloco_inicio:
-                     paragrafo_bloco_inicio._element.getparent().remove(paragrafo_bloco_inicio._element)
-                     
+                    paragrafo_bloco_inicio._element.getparent().remove(paragrafo_bloco_inicio._element)
                 documento.save(saida_caminho)
                 print(f"DEBUG: Arquivo final salvo em: {saida_caminho}")
                 return
@@ -343,12 +298,13 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
             
             # Se o match falhar aqui, o modelo está malformado.
             if not match_bloco:
-                 raise Exception("Erro fatal ao extrair o conteúdo do bloco de repetição. Verifique se há dois marcadores '<***>' no modelo.")
+                raise Exception("Erro fatal ao extrair o conteúdo do bloco de repetição. Verifique se há dois marcadores '<***>' no modelo.")
             
             bloco_base_string = match_bloco.group(1).replace('<***>', '').strip()
             
             # 3c. Substitui variáveis do primeiro ponto (M01) em qualquer lugar
             primeiro_ponto = pontos[0]
+            # A abertura já está substituída pelo Passo 2.
             substituir_texto_em_docx(documento, primeiro_ponto)
 
             # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO (Lógica de String Original) ---
@@ -380,87 +336,62 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
                     dados_paragrafo['<CONFRONTANTE>'] = confrontante_atual
                     ultimo_confrontante = confrontante_atual
                 # -----------------------------------------
-
-                # Substitui placeholders
+                
+                # --- INÍCIO DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Geração da String) ---
+                # Substitui primeiro o <PONTO> por um token para que a variável real não seja substituída
+                # ainda pelo loop de substituição de strings abaixo.
+                token_ponto = "@@PONTO_NEGRITO@@"
+                bloco_formatado_sem_ponto = bloco_formatado.replace('<PONTO>', token_ponto)
+                
+                # Substitui placeholders que NÃO são o token
                 for chave, valor in dados_paragrafo.items():
-                    bloco_formatado = bloco_formatado.replace(chave, str(valor))
+                    if chave == '<PONTO>': continue # Pula o placeholder de PONTO
+                    bloco_formatado_sem_ponto = bloco_formatado_sem_ponto.replace(chave, str(valor))
 
-                if '<CONFRO>' in bloco_formatado:
-                    bloco_formatado = bloco_formatado.replace("<CONFRO>", f"Confronto {numero_confronto}")
+                if '<CONFRO>' in bloco_formatado_sem_ponto:
+                    bloco_formatado_sem_ponto = bloco_formatado_sem_ponto.replace("<CONFRO>", f"Confronto {numero_confronto}")
 
-                blocos_gerados.append(bloco_formatado)
+                # Guarda a string sem o PONTO real, mas com o token.
+                blocos_gerados.append(bloco_formatado_sem_ponto)
             
             # 4. Inserção dos Blocos e Limpeza
             print("DEBUG: Inserindo blocos gerados e limpando marcadores.")
             
-            # --- NOVO CÓDIGO AQUI ---
-            
-            # 4a. Obtém o parágrafo de referência para o estilo (o que continha o '<***>')
-            # Usamos o paragrafo_bloco_inicio como referência de onde inserir e qual estilo usar
             paragrafo_ref = paragraphs_to_remove[0] if paragraphs_to_remove else paragrafo_bloco_inicio
             estilo_referencia = paragrafo_ref.style
             
-            # 4b. Adiciona os blocos gerados como novos parágrafos antes da referência
-            for bloco_texto in blocos_gerados:
-                if bloco_texto.strip():
-                    # Insere um novo parágrafo *antes* da referência
-                    novo_paragrafo = paragrafo_bloco_inicio.insert_paragraph_before(bloco_texto)
+            # Adiciona os blocos gerados
+            for idx, bloco_texto_sem_ponto in enumerate(blocos_gerados):
+                if bloco_texto_sem_ponto.strip():
                     
-                    # Aplica o estilo do parágrafo de referência (importante para o espaçamento/alinhamento)
+                    # Para o loop de repetição, o ponto de destino é sempre o (idx + 1)
+                    proximo_ponto_nome = pontos[idx + 1].get('<PONTO>', '')
+                    
+                    novo_paragrafo = paragrafo_bloco_inicio.insert_paragraph_before('') # Inicia vazio
                     novo_paragrafo.style = estilo_referencia
+
+                    # Divide o texto no token
+                    partes = bloco_texto_sem_ponto.split(token_ponto)
                     
-                    # O novo parágrafo foi criado apenas com o 'bloco_texto'
-                    # Agora, iteramos nas runs do parágrafo de referência para COPIAR AS PROPRIEDADES DE FORMATO
-                    # e aplicamos essa formatação ao texto do novo parágrafo.
-                    
-                    # Limpa o texto original inserido (bloco_texto) que veio sem formatação
-                    novo_paragrafo.text = '' 
-                    
-                    # Adiciona o texto de volta como uma 'run' e aplica o negrito (se o original era negrito)
-                    # NOTA: O bloco_base_string deve ter sido formatado com negrito no seu modelo.
-                    # Vamos criar uma nova run e copiar a formatação. Se o texto todo é negrito,
-                    # ele deve ser copiado de uma run do original que estava em negrito.
-                    
-                    # Se você quer garantir o negrito, adicione manualmente:
-                    run = novo_paragrafo.add_run(bloco_texto)
-                    # Copia o negrito da primeira run do parágrafo de referência, por exemplo.
-                    if paragrafo_ref.runs and paragrafo_ref.runs[0].bold:
-                        run.bold = True
-                    # Isso é um chute, mas geralmente funciona para blocos de texto contínuos.
+                    # 1. Adiciona a parte antes do <PONTO>
+                    if len(partes) > 0:
+                        novo_paragrafo.add_run(partes[0])
+
+                    # 2. Adiciona o NOME do PONTO de DESTINO em NEGRITO
+                    if len(partes) > 1:
+                        novo_paragrafo.add_run(proximo_ponto_nome).bold = True
+                        
+                        # 3. Adiciona a parte depois
+                        novo_paragrafo.add_run(partes[1])
             
             # 4c. Remove todos os parágrafos que continham o bloco de repetição original
             for p_remove in paragraphs_to_remove:
                 p_remove._element.getparent().remove(p_remove._element)
 
-            # --- FIM NOVO CÓDIGO ---
+            # --- FIM DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Passo 4) ---
 
-            # 5. FECHAMENTO: último ponto voltando para M01
-            ultimo_ponto = pontos[-1]
-            primeiro_ponto = pontos[0]
-            numero_confronto = len(pontos) # último confronto
-
-            fechamento_texto = (
-                f"Confronto {numero_confronto}: deste segue confrontando com a propriedade de {ultimo_ponto.get('<CONFRONTANTE>', '')}, "
-                f"com azimute de {ultimo_ponto.get('<AZIMUTE>', '')} por uma distância de {ultimo_ponto.get('<DISTANCIA>', '')}m, "
-                f"até o ponto {primeiro_ponto.get('<PONTO>', '')}, onde teve início essa descrição."
-            )
-            
-            print("DEBUG: Adicionando texto de fechamento do perímetro.")
-            
-            # Procura a frase de fechamento no documento e a substitui (caso exista)
-            padrao_fechamento = r"Confronto\s*\d+:\s*deste\s*segue.*?essa\s*descrição\."
-            
-            fechamento_substituido = False
-            
-            # Itera pelos parágrafos para substituir o fechamento, se já existir
-            for p in documento.paragraphs:
-                # Usamos re.search no texto completo do parágrafo para encontrar o padrão
-                match = re.search(padrao_fechamento, p.text, flags=re.DOTALL | re.IGNORECASE)
-                if match:
-                    # Se encontrado, substituímos o texto do parágrafo inteiro.
-                    p.text = fechamento_texto
-                    fechamento_substituido = True
-                    break
+            # --- PASSO 5 REMOVIDO: Não gera mais o parágrafo de fechamento "Confronto X: ..." ---
+            # O código termina aqui, salvando o documento após o último bloco de repetição.
             
             # 6. Salva o documento
             documento.save(saida_caminho)
@@ -477,20 +408,16 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
 
 
 def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf):
-    """
-    Lógica ORIGINAL para processar modelos RTF (manipulação de string).
-    """
+    # ... (função inalterada)
     try:
         print(f"DEBUG: Iniciando processamento do RTF (string-based): {modelo_rtf}")
         
-        # Leitura com windows-1252, como na versão original.
         with open(modelo_rtf, 'r', encoding='windows-1252', errors='ignore') as f:
             texto_modelo = f.read()
 
         if not texto_modelo:
             raise ValueError("O arquivo modelo RTF está vazio ou não pôde ser lido.")
         
-        # Lista de todas as chaves a serem substituídas
         chaves = list(dados_gerais.keys()) + list(pontos[0].keys()) + ['<***>']
         texto_pronto = normalizar_chaves_rtf(texto_modelo, chaves)
         
@@ -516,82 +443,78 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf):
         blocos_gerados = []
         
         # --- ABERTURA: substitui variáveis do primeiro ponto (M01) no texto antes do bloco ---
-        primeiro_ponto = pontos[0]
-        for chave, valor in primeiro_ponto.items():
-            if chave in texto_antes:
-                texto_antes = texto_antes.replace(chave, str(valor))
+        first_point = pontos[0]
+        for key, value in first_point.items():
+            if key in texto_antes:
+                texto_antes = texto_antes.replace(key, str(value))
         # --------------------------------------------------------------------------------------
 
         # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO ---
         print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 1} blocos...")
         
-        ultimo_confrontante = None  # guarda o último confrontante realmente usado
+        last_confrontante = None
 
         for idx in range(len(pontos) - 1):
-            ponto_atual = pontos[idx]
-            proximo_ponto = pontos[idx + 1]
-            numero_confronto = idx + 1
+            current_point = pontos[idx]
+            next_point = pontos[idx + 1]
+            confronto_num = idx + 1
 
-            bloco_formatado = bloco_base[:]
+            formatted_block = bloco_base[:]
 
             # Dados básicos
-            dados_paragrafo = ponto_atual.copy()
-            dados_paragrafo.update({
-                '<PONTO>': proximo_ponto.get('<PONTO>', ''),
-                '<UTMX>': proximo_ponto.get('<UTMY>', ''), # O original está invertido aqui, mas mantido para respeitar a lógica.
-                '<UTMY>': proximo_ponto.get('<UTMX>', ''), # O original está invertido aqui, mas mantido para respeitar a lógica.
+            paragraph_data = current_point.copy()
+            paragraph_data.update({
+                '<PONTO>': next_point.get('<PONTO>', ''),
+                '<UTMX>': next_point.get('<UTMY>', ''),
+                '<UTMY>': next_point.get('<UTMX>', ''),
             })
-            # Nota: O original usava <UTMX> para <UTMY> e vice-versa na atualização. Mantendo o erro/feature.
 
-            # --- TRATAMENTO: confrontante repetido ---
-            confrontante_atual = ponto_atual.get('<CONFRONTANTE>', '').strip()
-            if confrontante_atual and confrontante_atual == ultimo_confrontante:
-                dados_paragrafo['<CONFRONTANTE>'] = "o mesmo"
+            # Tratamento: confrontante repetido
+            current_confrontante = current_point.get('<CONFRONTANTE>', '').strip()
+            if current_confrontante and current_confrontante == last_confrontante:
+                paragraph_data['<CONFRONTANTE>'] = "o mesmo"
             else:
-                dados_paragrafo['<CONFRONTANTE>'] = confrontante_atual
-                ultimo_confrontante = confrontante_atual
-            # -----------------------------------------
+                paragraph_data['<CONFRONTANTE>'] = current_confrontante
+                last_confrontante = current_confrontante
 
             # Substitui placeholders
-            for chave, valor in dados_paragrafo.items():
-                bloco_formatado = bloco_formatado.replace(chave, str(valor))
+            for key, value in paragraph_data.items():
+                formatted_block = formatted_block.replace(key, str(value))
 
-            if '<CONFRO>' in bloco_formatado:
-                bloco_formatado = bloco_formatado.replace("<CONFRO>", f"Confronto {numero_confronto}")
+            if '<CONFRO>' in formatted_block:
+                formatted_block = formatted_block.replace("<CONFRO>", f"Confronto {confronto_num}")
 
-            blocos_gerados.append(bloco_formatado)
+            blocos_gerados.append(formatted_block)
 
 
-        # --- FECHAMENTO: último ponto voltando para M01 ---
-        ultimo_ponto = pontos[-1]
-        primeiro_ponto = pontos[0]
-        numero_confronto = len(pontos) # último confronto
+        # --- FECHAMENTO: último ponto voltando para M01 (mantido para RTF) ---
+        last_point = pontos[-1]
+        first_point = pontos[0]
+        confronto_num = len(pontos)
 
-        fechamento_texto = (
-            f"Confronto {numero_confronto}: deste segue confrontando com a propriedade de {ultimo_ponto.get('<CONFRONTANTE>', '')}, "
-            f"com azimute de {ultimo_ponto.get('<AZIMUTE>', '')} por uma distância de {ultimo_ponto.get('<DISTANCIA>', '')}m, "
-            f"até o ponto {primeiro_ponto.get('<PONTO>', '')}, onde teve início essa descrição."
+        closing_text = (
+            f"Confronto {confronto_num}: deste segue confrontando com a propriedade de {last_point.get('<CONFRONTANTE>', '')}, "
+            f"com azimute de {last_point.get('<AZIMUTE>', '')} por uma distância de {last_point.get('<DISTANCIA>', '')}m, "
+            f"até o ponto {first_point.get('<PONTO>', '')}, onde teve início essa descrição."
         )
 
         print("DEBUG: Gerando texto de fechamento do perímetro.")
-        # Usamos uma regex para encontrar e substituir a frase de fechamento no modelo, se existir
-        padrao_fechamento = r"Confronto\s*\d+:\s*deste\s*segue.*?essa\s*descrição\."
+        closing_pattern = r"Confronto\s*\d+:\s*deste\s*segue.*?essa\s*descrição\."
         texto_depois_final, subs_feitas = re.subn(
-            padrao_fechamento,
-            fechamento_texto,
+            closing_pattern,
+            closing_text,
             texto_depois,
             flags=re.DOTALL | re.IGNORECASE
         )
 
         if subs_feitas == 0:
             print("DEBUG: Nenhuma frase de fechamento encontrada no modelo. Fechamento será adicionado ao final.")
-            texto_depois_final = texto_depois.strip() + " " + fechamento_texto
+            texto_depois_final = texto_depois.strip() + " " + closing_text
         
-        # Forçar substituição de variáveis ainda presentes no fechamento, se necessário
-        texto_depois_final = texto_depois_final.replace('<PONTO>', primeiro_ponto.get('<PONTO>', ''))
-        for chave, valor in ultimo_ponto.items():
-             texto_depois_final = texto_depois_final.replace(chave, str(valor))
-             
+        texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
+        for key, value in last_point.items():
+              texto_depois_final = texto_depois_final.replace(key, str(value))
+              
         # 5. Monta o texto final
         texto_final = texto_antes + "".join(blocos_gerados) + texto_depois_final
         
@@ -612,15 +535,11 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
 
 
 def selecionar_arquivos_e_processar():
-    """
-    Função principal que gerencia a seleção de arquivos e o processamento.
-    Atualizada para permitir a seleção de DOCX e RTF.
-    """
+    # ... (função inalterada)
     root = tk.Tk()
     root.withdraw()
 
     try:
-        # Filtro de arquivos atualizado: removendo DOC
         file_types = [
             ("Modelos de Documento", "*.rtf *.docx"),
             ("RTF Files", "*.rtf"),
@@ -632,10 +551,9 @@ def selecionar_arquivos_e_processar():
             messagebox.showinfo("Aviso", "Seleção cancelada.")
             return
         
-        # A extensão de saída será baseada na extensão do modelo
         extensao_modelo = Path(modelo_caminho).suffix.lower()
         if extensao_modelo not in ('.rtf', '.docx'):
-             raise ValueError("Extensão de modelo não reconhecida. Por favor, use .rtf ou .docx.")
+            raise ValueError("Extensão de modelo não reconhecida. Por favor, use .rtf ou .docx.")
         
         output_file_types = [
             ("Arquivo Final", f"*{extensao_modelo}"),
@@ -671,13 +589,13 @@ def selecionar_arquivos_e_processar():
         print("\n--- Verificação de dados carregados ---")
         if dados_gerais:
             print("Dados gerais carregados com sucesso.")
-            print(f"  Número de itens: {len(dados_gerais)}")
+            print(f"   Número de itens: {len(dados_gerais)}")
         else:
             raise ValueError("Não foi possível carregar os dados gerais.")
         
         if pontos:
             print("Pontos carregados com sucesso.")
-            print(f"  Número de pontos: {len(pontos)}")
+            print(f"   Número de pontos: {len(pontos)}")
         else:
             raise ValueError("Não foi possível carregar os pontos.")
         
@@ -690,6 +608,7 @@ def selecionar_arquivos_e_processar():
         messagebox.showerror("Erro", f"Erro ao gerar arquivo:\n{e}")
 
 def main():
+    # ... (função inalterada)
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo DOCX/RTF")
     # Ajuda e descrição atualizadas
     parser.add_argument("modelo", nargs="?", help="Caminho do Modelo (RTF ou DOCX)")
