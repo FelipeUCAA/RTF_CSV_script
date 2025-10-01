@@ -149,7 +149,7 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
     current_char_count = 0
     for i, run in enumerate(paragraph.runs):
         run_text = run.text
-        run_len = len(run_text)
+        run_len = len(run.text)
         
         if current_char_count + run_len > paragraph.text.find(placeholder) and start_run_index == -1:
             start_run_index = i
@@ -220,18 +220,19 @@ def substituir_texto_em_docx(documento, dados_substituicao):
                     
 # Função converter_doc_para_docx removida, pois o suporte a .doc foi descontinuado.
     
-def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
+def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignorar_confrontante_repetido=False):
     """
     Processa o modelo (RTF ou DOCX), preenche com os dados,
     e salva o resultado. Roteador de extensão.
+    O novo parâmetro 'ignorar_confrontante_repetido' controla a lógica 'o mesmo'.
     """
     caminho_modelo_path = Path(caminho_modelo)
     extensao = caminho_modelo_path.suffix.lower()
     
     try:
         if extensao == '.rtf':
-            # --- Lógica Original para RTF (Baseada em Manipulação de String) ---
-            return processar_rtf_string(caminho_modelo, dados_gerais, pontos, saida_caminho)
+            # Passa a flag para a função RTF
+            return processar_rtf_string(caminho_modelo, dados_gerais, pontos, saida_caminho, ignorar_confrontante_repetido)
         
         elif extensao == '.docx':
             # --- Lógica para DOCX ---
@@ -328,14 +329,19 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
                     '<UTMY>': proximo_ponto.get('<UTMX>', ''),
                 })
 
-                # --- TRATAMENTO: confrontante repetido ---
-                confrontante_atual = ponto_atual.get('<CONFRONTANTE>', '').strip()
-                if confrontante_atual and confrontante_atual == ultimo_confrontante:
-                    dados_paragrafo['<CONFRONTANTE>'] = "o mesmo"
+                # --- TRATAMENTO: confrontante repetido (AGORA CONDICIONAL) ---
+                if not ignorar_confrontante_repetido:
+                    confrontante_atual = ponto_atual.get('<CONFRONTANTE>', '').strip()
+                    if confrontante_atual and confrontante_atual == ultimo_confrontante:
+                        dados_paragrafo['<CONFRONTANTE>'] = "o mesmo"
+                    else:
+                        dados_paragrafo['<CONFRONTANTE>'] = confrontante_atual
+                        ultimo_confrontante = confrontante_atual
                 else:
-                    dados_paragrafo['<CONFRONTANTE>'] = confrontante_atual
-                    ultimo_confrontante = confrontante_atual
-                # -----------------------------------------
+                    # Se for para ignorar a repetição, sempre usa o valor do CSV.
+                    dados_paragrafo['<CONFRONTANTE>'] = ponto_atual.get('<CONFRONTANTE>', '')
+
+                # ------------------------------------------------------------------
                 
                 # --- INÍCIO DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Geração da String) ---
                 # Substitui primeiro o <PONTO> por um token para que a variável real não seja substituída
@@ -360,38 +366,60 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
             paragrafo_ref = paragraphs_to_remove[0] if paragraphs_to_remove else paragrafo_bloco_inicio
             estilo_referencia = paragrafo_ref.style
             
+            # --- INÍCIO DA EXTRAÇÃO DA FORMATAÇÃO DE CARACTERE (FONTE/TAMANHO) ---
+            run_ref = None
+            for r in paragrafo_ref.runs:
+                if r.text.strip():
+                    run_ref = r
+                    break
+            if run_ref is None and paragrafo_ref.runs:
+                 run_ref = paragrafo_ref.runs[-1]
+            
+            font_ref = run_ref.font.name if run_ref and run_ref.font.name else None
+            size_ref = run_ref.font.size if run_ref and run_ref.font.size else None
+            bold_ref = run_ref.bold if run_ref else False
+            # --- FIM DA EXTRAÇÃO DA FORMATAÇÃO ---
+            
             # Adiciona os blocos gerados
             for idx, bloco_texto_sem_ponto in enumerate(blocos_gerados):
                 if bloco_texto_sem_ponto.strip():
                     
-                    # Para o loop de repetição, o ponto de destino é sempre o (idx + 1)
                     proximo_ponto_nome = pontos[idx + 1].get('<PONTO>', '')
                     
                     novo_paragrafo = paragrafo_bloco_inicio.insert_paragraph_before('') # Inicia vazio
                     novo_paragrafo.style = estilo_referencia
 
+                    # Define função auxiliar para aplicar a formatação base
+                    def apply_base_format(r):
+                        if font_ref: r.font.name = font_ref
+                        if size_ref: r.font.size = size_ref
+                        if bold_ref: r.bold = True
+                        return r
+                    
                     # Divide o texto no token
                     partes = bloco_texto_sem_ponto.split(token_ponto)
                     
                     # 1. Adiciona a parte antes do <PONTO>
                     if len(partes) > 0:
-                        novo_paragrafo.add_run(partes[0])
+                        run = novo_paragrafo.add_run(partes[0])
+                        apply_base_format(run)
 
                     # 2. Adiciona o NOME do PONTO de DESTINO em NEGRITO
                     if len(partes) > 1:
-                        novo_paragrafo.add_run(proximo_ponto_nome).bold = True
+                        run = novo_paragrafo.add_run(proximo_ponto_nome)
+                        run.bold = True # Força negrito no PONTO
+                        if font_ref: run.font.name = font_ref
+                        if size_ref: run.font.size = size_ref
                         
                         # 3. Adiciona a parte depois
-                        novo_paragrafo.add_run(partes[1])
+                        run = novo_paragrafo.add_run(partes[1])
+                        apply_base_format(run)
             
             # 4c. Remove todos os parágrafos que continham o bloco de repetição original
             for p_remove in paragraphs_to_remove:
                 p_remove._element.getparent().remove(p_remove._element)
 
             # --- FIM DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Passo 4) ---
-
-            # --- PASSO 5 REMOVIDO: Não gera mais o parágrafo de fechamento "Confronto X: ..." ---
-            # O código termina aqui, salvando o documento após o último bloco de repetição.
             
             # 6. Salva o documento
             documento.save(saida_caminho)
@@ -407,8 +435,11 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho):
         pass 
 
 
-def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf):
-    # ... (função inalterada)
+def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_confrontante_repetido=False):
+    """
+    Lógica ORIGINAL para processar modelos RTF (manipulação de string).
+    A lógica de confrontante repetido foi adicionada aqui.
+    """
     try:
         print(f"DEBUG: Iniciando processamento do RTF (string-based): {modelo_rtf}")
         
@@ -469,13 +500,19 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf):
                 '<UTMY>': next_point.get('<UTMX>', ''),
             })
 
-            # Tratamento: confrontante repetido
-            current_confrontante = current_point.get('<CONFRONTANTE>', '').strip()
-            if current_confrontante and current_confrontante == last_confrontante:
-                paragraph_data['<CONFRONTANTE>'] = "o mesmo"
+            # --- TRATAMENTO: confrontante repetido (AGORA CONDICIONAL) ---
+            if not ignorar_confrontante_repetido:
+                current_confrontante = current_point.get('<CONFRONTANTE>', '').strip()
+                if current_confrontante and current_confrontante == last_confrontante:
+                    paragraph_data['<CONFRONTANTE>'] = "o mesmo"
+                else:
+                    paragraph_data['<CONFRONTANTE>'] = current_confrontante
+                    last_confrontante = current_confrontante
             else:
-                paragraph_data['<CONFRONTANTE>'] = current_confrontante
-                last_confrontante = current_confrontante
+                # Se for para ignorar a repetição, sempre usa o valor do CSV.
+                paragraph_data['<CONFRONTANTE>'] = current_point.get('<CONFRONTANTE>', '')
+
+            # ------------------------------------------------------------------
 
             # Substitui placeholders
             for key, value in paragraph_data.items():
@@ -519,7 +556,7 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf):
         texto_final = texto_antes + "".join(blocos_gerados) + texto_depois_final
         
         # 6. Salva o arquivo RTF
-        with open(saida_rtf, 'w', encoding='windows-1252', errors='ignore') as f:
+        with open(saida_rtf, 'w', encoding='windows-1252') as f:
             f.write(texto_final)
         print(f"DEBUG: Arquivo final salvo em: {saida_rtf}")
 
@@ -531,11 +568,12 @@ def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
     """
     Função wrapper que mantém a assinatura original e chama o roteador de extensão.
     """
-    return processar_modelo(modelo_rtf, dados_gerais, pontos, saida_rtf)
+    # Se chamado por essa função (não pelo main), assume o padrão (não ignorar a repetição)
+    return processar_modelo(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_confrontante_repetido=False)
 
 
 def selecionar_arquivos_e_processar():
-    # ... (função inalterada)
+    # ... (função inalterada - padrão é não ignorar a repetição)
     root = tk.Tk()
     root.withdraw()
 
@@ -600,23 +638,32 @@ def selecionar_arquivos_e_processar():
             raise ValueError("Não foi possível carregar os pontos.")
         
         print(f"\n--- Iniciando o processamento do Modelo ({extensao_modelo}) ---")
-        # Chamada da função unificada
-        processar_modelo(modelo_caminho, dados_gerais, pontos, saida_caminho)
+        # Chamada da função unificada (padrão para GUI é não ignorar a repetição)
+        processar_modelo(modelo_caminho, dados_gerais, pontos, saida_caminho, ignorar_confrontante_repetido=False)
         messagebox.showinfo("Sucesso", f"Memorial gerado com sucesso:\n{saida_caminho}")
     except Exception as e:
         print(f"ERRO: {e}")
         messagebox.showerror("Erro", f"Erro ao gerar arquivo:\n{e}")
 
 def main():
-    # ... (função inalterada)
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo DOCX/RTF")
-    # Ajuda e descrição atualizadas
+    # Argumento para desativar o comportamento Padrão (Substituir por "o mesmo")
+    # Se passado, "nao_repetir_confrontante" será True, o que é mapeado para IGNORAR a repetição.
+    parser.add_argument("--nao_repetir_confrontante", action="store_true", 
+                        help="Desativa a substituição de confrontantes repetidos por 'o mesmo'.")
+                        
+    # Argumentos originais
     parser.add_argument("modelo", nargs="?", help="Caminho do Modelo (RTF ou DOCX)")
     parser.add_argument("base", nargs="?", help="Caminho base (sem extensão, ex: D:\\TESTE-MOD)")
     parser.add_argument("--csv_pontos", help="Caminho do CSV com pontos")
     parser.add_argument("--csv_gerais", help="Caminho do CSV com dados gerais")
     parser.add_argument("--saida", help="Caminho para salvar o arquivo final")
     args = parser.parse_args()
+    
+    # Mapeia a flag do argumento para o parâmetro da função:
+    # True se o usuário passou --nao_repetir_confrontante (Ignora repetição)
+    # False se o usuário NÃO passou a flag (Comportamento Padrão: Repete "o mesmo")
+    ignorar_rep = args.nao_repetir_confrontante
 
     try:
         # --- MODO SIMPLIFICADO ---
@@ -639,8 +686,8 @@ def main():
             if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
                 dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
             
-            # Chamada da função unificada
-            processar_modelo(args.modelo, dados_gerais, pontos, saida_caminho)
+            # Chamada da função unificada (passando a flag)
+            processar_modelo(args.modelo, dados_gerais, pontos, saida_caminho, ignorar_confrontante_repetido=ignorar_rep)
             print(f"\n✅ Memorial gerado com sucesso: {saida_caminho}")
 
         # --- MODO COMPLETO (flags antigas) ---
@@ -650,8 +697,8 @@ def main():
             if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
                 dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
             
-            # Chamada da função unificada
-            processar_modelo(args.modelo, dados_gerais, pontos, args.saida)
+            # Chamada da função unificada (passando a flag)
+            processar_modelo(args.modelo, dados_gerais, pontos, args.saida, ignorar_confrontante_repetido=ignorar_rep)
             print(f"\n✅ Memorial gerado com sucesso: {args.saida}")
 
         # --- MODO GUI (fallback) ---
