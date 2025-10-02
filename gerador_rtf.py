@@ -375,7 +375,8 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             if run_ref is None and paragrafo_ref.runs:
                  run_ref = paragrafo_ref.runs[-1]
             
-            font_ref = run_ref.font.name if run_ref and run_ref.font.name else None
+            # MUDANÇA AQUI: Forçar a fonte para Arial, conforme solicitado.
+            font_ref = "Arial" 
             size_ref = run_ref.font.size if run_ref and run_ref.font.size else None
             bold_ref = run_ref.bold if run_ref else False
             # --- FIM DA EXTRAÇÃO DA FORMATAÇÃO ---
@@ -391,6 +392,7 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
 
                     # Define função auxiliar para aplicar a formatação base
                     def apply_base_format(r):
+                        # Usa a fonte forçada (Arial)
                         if font_ref: r.font.name = font_ref
                         if size_ref: r.font.size = size_ref
                         if bold_ref: r.bold = True
@@ -408,7 +410,7 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                     if len(partes) > 1:
                         run = novo_paragrafo.add_run(proximo_ponto_nome)
                         run.bold = True # Força negrito no PONTO
-                        if font_ref: run.font.name = font_ref
+                        if font_ref: run.font.name = font_ref # Força Arial
                         if size_ref: run.font.size = size_ref
                         
                         # 3. Adiciona a parte depois
@@ -550,8 +552,8 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         
         texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
         for key, value in last_point.items():
-              texto_depois_final = texto_depois_final.replace(key, str(value))
-              
+             texto_depois_final = texto_depois_final.replace(key, str(value))
+             
         # 5. Monta o texto final
         texto_final = texto_antes + "".join(blocos_gerados) + texto_depois_final
         
@@ -627,13 +629,13 @@ def selecionar_arquivos_e_processar():
         print("\n--- Verificação de dados carregados ---")
         if dados_gerais:
             print("Dados gerais carregados com sucesso.")
-            print(f"   Número de itens: {len(dados_gerais)}")
+            print(f" 	 Número de itens: {len(dados_gerais)}")
         else:
             raise ValueError("Não foi possível carregar os dados gerais.")
         
         if pontos:
             print("Pontos carregados com sucesso.")
-            print(f"   Número de pontos: {len(pontos)}")
+            print(f" 	 Número de pontos: {len(pontos)}")
         else:
             raise ValueError("Não foi possível carregar os pontos.")
         
@@ -647,11 +649,10 @@ def selecionar_arquivos_e_processar():
 
 def main():
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo DOCX/RTF")
-    # Argumento para desativar o comportamento Padrão (Substituir por "o mesmo")
-    # Se passado, "nao_repetir_confrontante" será True, o que é mapeado para IGNORAR a repetição.
-    parser.add_argument("--nao_repetir_confrontante", action="store_true", 
-                        help="Desativa a substituição de confrontantes repetidos por 'o mesmo'.")
-                        
+    # ALTERAÇÃO: Argumento simplificado para --x
+    parser.add_argument("--x", action="store_true", 
+                         help="Desativa a substituição de confrontantes repetidos por 'o mesmo'.")
+                         
     # Argumentos originais
     parser.add_argument("modelo", nargs="?", help="Caminho do Modelo (RTF ou DOCX)")
     parser.add_argument("base", nargs="?", help="Caminho base (sem extensão, ex: D:\\TESTE-MOD)")
@@ -660,10 +661,10 @@ def main():
     parser.add_argument("--saida", help="Caminho para salvar o arquivo final")
     args = parser.parse_args()
     
-    # Mapeia a flag do argumento para o parâmetro da função:
-    # True se o usuário passou --nao_repetir_confrontante (Ignora repetição)
+    # Mapeia a nova flag para o parâmetro da função:
+    # True se o usuário passou --x (Ignora repetição, usa o valor bruto)
     # False se o usuário NÃO passou a flag (Comportamento Padrão: Repete "o mesmo")
-    ignorar_rep = args.nao_repetir_confrontante
+    ignorar_rep = args.x
 
     try:
         # --- MODO SIMPLIFICADO ---
