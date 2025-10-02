@@ -22,10 +22,10 @@ try:
     from docx.text.run import Run
 except ImportError:
     Document = MockDocument
-    print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX não funcionará.")
+    # print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX não funcionará.")
 
 
-# --- Funções de Leitura de Arquivos com Fallback de Codificação (inalteradas) ---
+# --- Funções de Leitura de Arquivos com Fallback de Codificação ---
 def ler_arquivo_com_fallback(caminho):
     if not Path(caminho).exists():
         raise FileNotFoundError(f"O arquivo não foi encontrado no caminho: {caminho}")
@@ -37,38 +37,40 @@ def ler_arquivo_com_fallback(caminho):
             continue
     raise UnicodeDecodeError(f"Não foi possível ler o arquivo {caminho} com codificações conhecidas.")
 
-# --- Funções de Carregamento de Dados (inalteradas) ---
+# --- Funções de Carregamento de Dados ---
 def carregar_dados_gerais(caminho_csv):
     dados_gerais = {}
     try:
         print(f"DEBUG: Carregando dados gerais de: {caminho_csv}")
         conteudo = ler_arquivo_com_fallback(caminho_csv)
+        # Usando o módulo csv para garantir a separação correta por ponto e vírgula
         leitor = csv.reader(conteudo.splitlines(), delimiter=';')
     
-        try:
-            primeira_linha = next(leitor)
-            if primeira_linha and primeira_linha[0].strip() == "<PONTO>":
-                raise ValueError("Você selecionou o arquivo de pontos para os dados gerais. Por favor, selecione o arquivo de dados gerais (<CHAVE>;<VALOR>).")
-        except StopIteration:
-            raise ValueError("O arquivo CSV de dados gerais está vazio.")
-
-        linhas_restantes = [primeira_linha] + list(leitor)
+        linhas_restantes = list(leitor)
 
         for i, linha in enumerate(linhas_restantes):
             if not linha:
                 continue
             
             try:
+                # O arquivo de dados gerais deve ter <CHAVE>;<VALOR>
                 if len(linha) >= 2 and re.match(r"<[A-Z_]+>", linha[0].strip()):
                     chave = linha[0].strip()
                     valor = linha[1].strip()
+                    
+                    if chave == "<PONTO>":
+                         raise ValueError("Você selecionou o arquivo de pontos para os dados gerais. Por favor, selecione o arquivo de dados gerais (<CHAVE>;<VALOR>).")
+
                     dados_gerais[chave] = valor
-                    print(f"DEBUG: Linha {i+1} - Chave: {chave}, Valor: {valor}")
+                    # print(f"DEBUG: Linha {i+1} - Chave: {chave}, Valor: {valor}")
+                # Ignora linhas que não são chaves válidas
+                
             except IndexError:
                 raise ValueError(f"Linha malformada no arquivo de dados gerais, linha {i+1}: {linha}. Esperado '<CHAVE>;<VALOR>'.")
         
         if not dados_gerais:
-            raise ValueError("Nenhum dado geral foi encontrado. Verifique se o formato é '<CHAVE>;<VALOR>'.")
+            # Não lança erro se o arquivo estiver vazio, mas se não encontrar dados válidos.
+            pass
         
         print(f"DEBUG: {len(dados_gerais)} dados gerais carregados com sucesso.")
     
@@ -88,6 +90,7 @@ def carregar_pontos(caminho_csv):
         
         cabecalho = []
         for i, linha in enumerate(linhas):
+            # Usando split(';') sem o módulo csv porque o formato <PONTO> é mais maleável
             campos = [campo.strip().strip('"') for campo in linha.split(';')]
             
             while campos and not campos[-1]:
@@ -105,6 +108,9 @@ def carregar_pontos(caminho_csv):
                 
                 try:
                     num_campos_esperados = len(cabecalho)
+                    if num_campos_esperados == 0:
+                        raise ValueError("Cabeçalho '<PONTO>' está vazio ou malformado.")
+
                     if len(campos) < num_campos_esperados:
                         campos.extend([''] * (num_campos_esperados - len(campos)))
                     elif len(campos) > num_campos_esperados:
@@ -112,7 +118,7 @@ def carregar_pontos(caminho_csv):
 
                     ponto = dict(zip(cabecalho, [val.strip() for val in campos]))
                     pontos.append(ponto)
-                    print(f"DEBUG: Ponto {ponto.get('<PONTO>', '')} carregado.")
+                    # print(f"DEBUG: Ponto {ponto.get('<PONTO>', '')} carregado.")
                 except IndexError:
                     raise ValueError(f"Linha malformada no arquivo de pontos, linha {i+1}: {linha}. Verifique o número de colunas.")
 
@@ -123,6 +129,7 @@ def carregar_pontos(caminho_csv):
     except Exception as e:
         raise ValueError(f"Erro ao carregar os pontos do CSV. Detalhes: {e}")
     
+    # Lógica para evitar ponto final duplicado (se o último for igual ao primeiro)
     if len(pontos) > 1 and pontos[0].get('<PONTO>') == pontos[-1].get('<PONTO>'):
         print("DEBUG: Ponto final duplicado encontrado. Removendo da lista de pontos para o loop de repetição.")
         pontos.pop()
@@ -193,11 +200,13 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
     else:
         start_run.text = prefix_text + str(replacement)
         
+        # Clear intermediate runs
         for i in range(start_run_index + 1, end_run_index):
             paragraph.runs[i].clear()
             
         end_run.text = suffix_text
         
+        # Remove empty runs elements from the underlying XML
         for i in range(len(paragraph.runs) - 1, -1, -1):
             if not paragraph.runs[i].text:
                 p = paragraph._element
@@ -218,13 +227,10 @@ def substituir_texto_em_docx(documento, dados_substituicao):
             for celula in linha.cells:
                 substituir_em_estrutura(celula)
                     
-# Função converter_doc_para_docx removida, pois o suporte a .doc foi descontinuado.
-    
 def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignorar_confrontante_repetido=False):
     """
     Processa o modelo (RTF ou DOCX), preenche com os dados,
     e salva o resultado. Roteador de extensão.
-    O novo parâmetro 'ignorar_confrontante_repetido' controla a lógica 'o mesmo'.
     """
     caminho_modelo_path = Path(caminho_modelo)
     extensao = caminho_modelo_path.suffix.lower()
@@ -247,13 +253,10 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             
             # 2. Substitui apenas os dados gerais (em todo o documento)
             print("\nDEBUG: Substituindo dados gerais...")
-            # Usa a nova função de substituição que preserva o negrito/formatação
             substituir_texto_em_docx(documento, dados_gerais)
 
             # 3. Encontra e processa o bloco de repetição
-            padrao_bloco = r"(?s)<\*\*\*>(.*?)<\*\*\*>"
             
-            # 3a. Encontra o parágrafo marcador de INÍCIO
             paragrafo_bloco_inicio = None
             start_index = -1
             end_index = -1
@@ -275,17 +278,15 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
 
             # VERIFICAÇÃO DE BLOCO E PONTOS
             if start_index == -1 or end_index == -1 or len(pontos) < 2:
-                # ... (lógica de fallback inalterada)
                 print("\nDEBUG: Bloco de repetição não encontrado ou número de pontos insuficiente. Processando como arquivo simples.")
                 if paragrafo_bloco_inicio:
-                    paragrafo_bloco_inicio._element.getparent().remove(paragrafo_bloco_inicio._element)
+                    paragrafo_bloco_inicio.text = paragrafo_bloco_inicio.text.replace("<***>", "")
                 documento.save(saida_caminho)
                 print(f"DEBUG: Arquivo final salvo em: {saida_caminho}")
                 return
                 
             # 3b. Extrair o Bloco Base de repetição
             
-            # Compile o texto do bloco abrangendo P_start até P_end
             block_text_raw = ""
             paragraphs_to_remove = []
             
@@ -294,10 +295,9 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                 block_text_raw += p.text + "\n"
                 paragraphs_to_remove.append(p)
                 
-            # Agora, aplica o regex no texto multi-parágrafo para extrair o conteúdo exato.
+            padrao_bloco = r"(?s)<\*\*\*>(.*?)<\*\*\*>"
             match_bloco = re.search(padrao_bloco, block_text_raw)
             
-            # Se o match falhar aqui, o modelo está malformado.
             if not match_bloco:
                 raise Exception("Erro fatal ao extrair o conteúdo do bloco de repetição. Verifique se há dois marcadores '<***>' no modelo.")
             
@@ -305,7 +305,6 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             
             # 3c. Substitui variáveis do primeiro ponto (M01) em qualquer lugar
             primeiro_ponto = pontos[0]
-            # A abertura já está substituída pelo Passo 2.
             substituir_texto_em_docx(documento, primeiro_ponto)
 
             # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO (Lógica de String Original) ---
@@ -338,35 +337,25 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                         dados_paragrafo['<CONFRONTANTE>'] = confrontante_atual
                         ultimo_confrontante = confrontante_atual
                 else:
-                    # Se for para ignorar a repetição, sempre usa o valor do CSV.
                     dados_paragrafo['<CONFRONTANTE>'] = ponto_atual.get('<CONFRONTANTE>', '')
 
-                # ------------------------------------------------------------------
-                
                 # --- INÍCIO DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Geração da String) ---
-                # Substitui primeiro o <PONTO> por um token para que a variável real não seja substituída
-                # ainda pelo loop de substituição de strings abaixo.
                 token_ponto = "@@PONTO_NEGRITO@@"
                 bloco_formatado_sem_ponto = bloco_formatado.replace('<PONTO>', token_ponto)
                 
-                # Substitui placeholders que NÃO são o token
                 for chave, valor in dados_paragrafo.items():
-                    if chave == '<PONTO>': continue # Pula o placeholder de PONTO
+                    if chave == '<PONTO>': continue 
                     bloco_formatado_sem_ponto = bloco_formatado_sem_ponto.replace(chave, str(valor))
 
                 if '<CONFRO>' in bloco_formatado_sem_ponto:
                     bloco_formatado_sem_ponto = bloco_formatado_sem_ponto.replace("<CONFRO>", f"Confronto {numero_confronto}")
 
-                # Guarda a string sem o PONTO real, mas com o token.
                 blocos_gerados.append(bloco_formatado_sem_ponto)
             
             # 4. Inserção dos Blocos e Limpeza
-            print("DEBUG: Inserindo blocos gerados e limpando marcadores.")
-            
             paragrafo_ref = paragraphs_to_remove[0] if paragraphs_to_remove else paragrafo_bloco_inicio
             estilo_referencia = paragrafo_ref.style
             
-            # --- INÍCIO DA EXTRAÇÃO DA FORMATAÇÃO DE CARACTERE (FONTE/TAMANHO) ---
             run_ref = None
             for r in paragrafo_ref.runs:
                 if r.text.strip():
@@ -375,65 +364,55 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             if run_ref is None and paragrafo_ref.runs:
                  run_ref = paragrafo_ref.runs[-1]
             
-            # MUDANÇA AQUI: Forçar a fonte para Arial, conforme solicitado.
             font_ref = "Arial" 
             size_ref = run_ref.font.size if run_ref and run_ref.font.size else None
             bold_ref = run_ref.bold if run_ref else False
-            # --- FIM DA EXTRAÇÃO DA FORMATAÇÃO ---
             
-            # Adiciona os blocos gerados
+            paragrafo_ancora = documento.paragraphs[end_index] if end_index < len(documento.paragraphs) else documento.paragraphs[-1]
+            
             for idx, bloco_texto_sem_ponto in enumerate(blocos_gerados):
                 if bloco_texto_sem_ponto.strip():
                     
                     proximo_ponto_nome = pontos[idx + 1].get('<PONTO>', '')
                     
-                    novo_paragrafo = paragrafo_bloco_inicio.insert_paragraph_before('') # Inicia vazio
+                    novo_paragrafo = paragrafo_ancora.insert_paragraph_before('') 
                     novo_paragrafo.style = estilo_referencia
 
-                    # Define função auxiliar para aplicar a formatação base
                     def apply_base_format(r):
-                        # Usa a fonte forçada (Arial)
                         if font_ref: r.font.name = font_ref
                         if size_ref: r.font.size = size_ref
-                        if bold_ref: r.bold = True
+                        if bold_ref: r.bold = True 
                         return r
                     
-                    # Divide o texto no token
                     partes = bloco_texto_sem_ponto.split(token_ponto)
                     
-                    # 1. Adiciona a parte antes do <PONTO>
                     if len(partes) > 0:
                         run = novo_paragrafo.add_run(partes[0])
                         apply_base_format(run)
 
-                    # 2. Adiciona o NOME do PONTO de DESTINO em NEGRITO
                     if len(partes) > 1:
                         run = novo_paragrafo.add_run(proximo_ponto_nome)
-                        run.bold = True # Força negrito no PONTO
-                        if font_ref: run.font.name = font_ref # Força Arial
+                        run.bold = True
+                        if font_ref: run.font.name = font_ref
                         if size_ref: run.font.size = size_ref
                         
-                        # 3. Adiciona a parte depois
                         run = novo_paragrafo.add_run(partes[1])
                         apply_base_format(run)
             
-            # 4c. Remove todos os parágrafos que continham o bloco de repetição original
             for p_remove in paragraphs_to_remove:
-                p_remove._element.getparent().remove(p_remove._element)
+                if p_remove._element.getparent() is not None:
+                     p_remove._element.getparent().remove(p_remove._element)
 
-            # --- FIM DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Passo 4) ---
-            
-            # 6. Salva o documento
+
+            # 5. Salva o documento
             documento.save(saida_caminho)
             print(f"DEBUG: Arquivo final salvo em: {saida_caminho}")
             return
 
         else:
-            # Mensagem de erro atualizada
             raise ValueError(f"Extensão de arquivo não suportada: {extensao}. Suportadas: .rtf, .docx")
             
     finally:
-        # A remoção de arquivos temporários não é mais necessária
         pass 
 
 
@@ -451,7 +430,7 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         if not texto_modelo:
             raise ValueError("O arquivo modelo RTF está vazio ou não pôde ser lido.")
         
-        chaves = list(dados_gerais.keys()) + list(pontos[0].keys()) + ['<***>']
+        chaves = list(dados_gerais.keys()) + list(pontos[0].keys()) + ['<***>', '<CONFRO>']
         texto_pronto = normalizar_chaves_rtf(texto_modelo, chaves)
         
         # 1. Substitui apenas os dados gerais
@@ -459,14 +438,16 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         for chave, valor in dados_gerais.items():
             texto_pronto = texto_pronto.replace(chave, str(valor))
 
-        # 2. Encontra o bloco de repetição e o texto de fechamento
+        # 2. Encontra o bloco de repetição
         padrao_bloco = r"(?s)<\*\*\*>(.*?)<\*\*\*>"
         match_bloco = re.search(padrao_bloco, texto_pronto)
 
         if not match_bloco or len(pontos) < 2:
             print("\nDEBUG: Bloco de repetição não encontrado ou número de pontos insuficiente. Processando como arquivo simples.")
             with open(saida_rtf, 'w', encoding='windows-1252') as f:
+                texto_pronto = texto_pronto.replace('<***>', '')
                 f.write(texto_pronto)
+            print(f"DEBUG: Arquivo final salvo em: {saida_rtf}")
             return
 
         # Separar o texto em partes
@@ -478,8 +459,7 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         # --- ABERTURA: substitui variáveis do primeiro ponto (M01) no texto antes do bloco ---
         first_point = pontos[0]
         for key, value in first_point.items():
-            if key in texto_antes:
-                texto_antes = texto_antes.replace(key, str(value))
+            texto_antes = texto_antes.replace(key, str(value))
         # --------------------------------------------------------------------------------------
 
         # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO ---
@@ -497,9 +477,9 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
             # Dados básicos
             paragraph_data = current_point.copy()
             paragraph_data.update({
-                '<PONTO>': next_point.get('<PONTO>', ''),
-                '<UTMX>': next_point.get('<UTMY>', ''),
-                '<UTMY>': next_point.get('<UTMX>', ''),
+                '<PONTO>': next_point.get('<PONTO>', ''), # PONTO de DESTINO
+                '<UTMX>': next_point.get('<UTMY>', ''), # Troca de UTMX/UTMY foi mantida
+                '<UTMY>': next_point.get('<UTMX>', ''), # Troca de UTMX/UTMY foi mantida
             })
 
             # --- TRATAMENTO: confrontante repetido (AGORA CONDICIONAL) ---
@@ -511,10 +491,7 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
                     paragraph_data['<CONFRONTANTE>'] = current_confrontante
                     last_confrontante = current_confrontante
             else:
-                # Se for para ignorar a repetição, sempre usa o valor do CSV.
                 paragraph_data['<CONFRONTANTE>'] = current_point.get('<CONFRONTANTE>', '')
-
-            # ------------------------------------------------------------------
 
             # Substitui placeholders
             for key, value in paragraph_data.items():
@@ -526,19 +503,22 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
             blocos_gerados.append(formatted_block)
 
 
-        # --- FECHAMENTO: último ponto voltando para M01 (mantido para RTF) ---
-        last_point = pontos[-1]
+        # --- FECHAMENTO: último ponto voltando para M01 ---
+        # Usa o penúltimo ponto do CSV (pontos[-2]) para o último confronto
+        last_point_of_perimeter = pontos[-2]
         first_point = pontos[0]
-        confronto_num = len(pontos)
+        confronto_num = len(pontos) - 1 # Número total de confrontos
 
         closing_text = (
-            f"Confronto {confronto_num}: deste segue confrontando com a propriedade de {last_point.get('<CONFRONTANTE>', '')}, "
-            f"com azimute de {last_point.get('<AZIMUTE>', '')} por uma distância de {last_point.get('<DISTANCIA>', '')}m, "
+            f"Confronto {confronto_num}: deste segue confrontando com a propriedade de {last_point_of_perimeter.get('<CONFRONTANTE>', '')}, "
+            f"com azimute de {last_point_of_perimeter.get('<AZIMUTE>', '')} por uma distância de {last_point_of_perimeter.get('<DISTANCIA>', '')}m, "
             f"até o ponto {first_point.get('<PONTO>', '')}, onde teve início essa descrição."
         )
 
-        print("DEBUG: Gerando texto de fechamento do perímetro.")
+        print(f"DEBUG: Gerando texto de fechamento do perímetro ({confronto_num}º confronto).")
+        
         closing_pattern = r"Confronto\s*\d+:\s*deste\s*segue.*?essa\s*descrição\."
+        
         texto_depois_final, subs_feitas = re.subn(
             closing_pattern,
             closing_text,
@@ -547,11 +527,13 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         )
 
         if subs_feitas == 0:
-            print("DEBUG: Nenhuma frase de fechamento encontrada no modelo. Fechamento será adicionado ao final.")
-            texto_depois_final = texto_depois.strip() + " " + closing_text
+            print("DEBUG: Nenhuma frase de fechamento padrão encontrada. Tentando substituição de chaves no texto restante.")
+            texto_depois_final = texto_depois
         
+        # Substitui chaves restantes no texto final (Azimute/Distancia/Confrontante do último segmento e o Ponto inicial)
         texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
-        for key, value in last_point.items():
+        
+        for key, value in last_point_of_perimeter.items():
              texto_depois_final = texto_depois_final.replace(key, str(value))
              
         # 5. Monta o texto final
@@ -566,16 +548,7 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         raise Exception(f"Erro ao processar o RTF. Detalhes: {e}")
 
 
-def processar_rtf(modelo_rtf, dados_gerais, pontos, saida_rtf):
-    """
-    Função wrapper que mantém a assinatura original e chama o roteador de extensão.
-    """
-    # Se chamado por essa função (não pelo main), assume o padrão (não ignorar a repetição)
-    return processar_modelo(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_confrontante_repetido=False)
-
-
 def selecionar_arquivos_e_processar():
-    # ... (função inalterada - padrão é não ignorar a repetição)
     root = tk.Tk()
     root.withdraw()
 
@@ -623,19 +596,16 @@ def selecionar_arquivos_e_processar():
         print("--- Iniciando carregamento dos arquivos ---")
         dados_gerais = carregar_dados_gerais(csv_gerais)
         pontos = carregar_pontos(csv_pontos)
+        
         if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
             dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
         
         print("\n--- Verificação de dados carregados ---")
-        if dados_gerais:
-            print("Dados gerais carregados com sucesso.")
-            print(f" 	 Número de itens: {len(dados_gerais)}")
-        else:
-            raise ValueError("Não foi possível carregar os dados gerais.")
+        if not dados_gerais:
+             print("Aviso: Nenhum dado geral carregado.")
         
         if pontos:
-            print("Pontos carregados com sucesso.")
-            print(f" 	 Número de pontos: {len(pontos)}")
+            print(f"Pontos carregados com sucesso: {len(pontos)}.")
         else:
             raise ValueError("Não foi possível carregar os pontos.")
         
@@ -644,6 +614,7 @@ def selecionar_arquivos_e_processar():
         processar_modelo(modelo_caminho, dados_gerais, pontos, saida_caminho, ignorar_confrontante_repetido=False)
         messagebox.showinfo("Sucesso", f"Memorial gerado com sucesso:\n{saida_caminho}")
     except Exception as e:
+        # Apenas mostra o erro na tela (GUI)
         print(f"ERRO: {e}")
         messagebox.showerror("Erro", f"Erro ao gerar arquivo:\n{e}")
 
@@ -651,8 +622,8 @@ def main():
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo DOCX/RTF")
     # ALTERAÇÃO: Argumento simplificado para --x
     parser.add_argument("--x", action="store_true", 
-                         help="Desativa a substituição de confrontantes repetidos por 'o mesmo'.")
-                         
+                        help="Desativa a substituição de confrontantes repetidos por 'o mesmo'.")
+                        
     # Argumentos originais
     parser.add_argument("modelo", nargs="?", help="Caminho do Modelo (RTF ou DOCX)")
     parser.add_argument("base", nargs="?", help="Caminho base (sem extensão, ex: D:\\TESTE-MOD)")
@@ -662,28 +633,35 @@ def main():
     args = parser.parse_args()
     
     # Mapeia a nova flag para o parâmetro da função:
-    # True se o usuário passou --x (Ignora repetição, usa o valor bruto)
-    # False se o usuário NÃO passou a flag (Comportamento Padrão: Repete "o mesmo")
     ignorar_rep = args.x
+    
+    # Adicionando um aviso se a biblioteca docx não estiver disponível
+    if args.modelo and Path(args.modelo).suffix.lower() == '.docx' and Document is MockDocument:
+         print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX NÃO funcionará.", file=sys.stderr)
 
     try:
         # --- MODO SIMPLIFICADO ---
         if args.modelo and args.base and not (args.csv_pontos or args.csv_gerais or args.saida):
             modelo_path = Path(args.modelo)
-            extensao = modelo_path.suffix.upper() # Captura a extensão do modelo
+            # Usa .lower() para garantir consistência do nome de saída
+            extensao = modelo_path.suffix.lower() 
             
+            if not extensao: extensao = ".rtf" 
+            
+            # Formato esperado para o modo simplificado
             csv_gerais = args.base + "1.CSV"
             csv_pontos = args.base + "2.CSV"
-            saida_caminho = args.base + extensao # Usa a mesma extensão do modelo para a saída
+            saida_caminho = args.base + extensao 
 
-            print(f"--- Arquivos detectados ---")
+            print(f"--- MODO SIMPLIFICADO DETECTADO ({'Ignorar Repetição: SIM' if ignorar_rep else 'Ignorar Repetição: NÃO'}) ---")
             print(f"Modelo : {args.modelo}")
             print(f"CSV Gerais : {csv_gerais}")
             print(f"CSV Pontos : {csv_pontos}")
-            print(f"Saída : {saida_caminho}")
+            print(f"Saída Esperada : {saida_caminho}")
 
             dados_gerais = carregar_dados_gerais(csv_gerais)
             pontos = carregar_pontos(csv_pontos)
+            
             if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
                 dados_gerais["<AREAM2>"] = dados_gerais["<AREAHE>"]
             
@@ -693,6 +671,8 @@ def main():
 
         # --- MODO COMPLETO (flags antigas) ---
         elif args.modelo and args.csv_pontos and args.csv_gerais and args.saida:
+            print(f"--- MODO COMPLETO DETECTADO ({'Ignorar Repetição: SIM' if ignorar_rep else 'Ignorar Repetição: NÃO'}) ---")
+            
             dados_gerais = carregar_dados_gerais(args.csv_gerais)
             pontos = carregar_pontos(args.csv_pontos)
             if "<AREAHE>" in dados_gerais and "<AREAM2>" not in dados_gerais:
@@ -704,10 +684,11 @@ def main():
 
         # --- MODO GUI (fallback) ---
         else:
+            print("--- MODO GRÁFICO (GUI) DETECTADO ---")
             selecionar_arquivos_e_processar()
 
     except Exception as e:
-        print(f"ERRO FATAL: {e}", file=sys.stderr)
+        print(f"ERRO FATAL: Ocorreu um erro durante o processamento. Detalhes: {e}", file=sys.stderr)
         sys.exit(1)
 
 
