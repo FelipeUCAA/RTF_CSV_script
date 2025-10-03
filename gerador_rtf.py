@@ -59,7 +59,7 @@ def carregar_dados_gerais(caminho_csv):
                     valor = linha[1].strip()
                     
                     if chave == "<PONTO>":
-                         raise ValueError("Você selecionou o arquivo de pontos para os dados gerais. Por favor, selecione o arquivo de dados gerais (<CHAVE>;<VALOR>).")
+                        raise ValueError("Você selecionou o arquivo de pontos para os dados gerais. Por favor, selecione o arquivo de dados gerais (<CHAVE>;<VALOR>).")
 
                     dados_gerais[chave] = valor
                     # print(f"DEBUG: Linha {i+1} - Chave: {chave}, Valor: {valor}")
@@ -199,7 +199,7 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
         start_run.text = prefix_text + str(replacement) + suffix_text
     else:
         start_run.text = prefix_text + str(replacement)
-        
+    
         # Clear intermediate runs
         for i in range(start_run_index + 1, end_run_index):
             paragraph.runs[i].clear()
@@ -328,16 +328,17 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                     '<UTMY>': proximo_ponto.get('<UTMX>', ''),
                 })
 
-                # --- TRATAMENTO: confrontante repetido (AGORA CONDICIONAL) ---
-                if not ignorar_confrontante_repetido:
+                # --- TRATAMENTO: confrontante repetido (Lógica Invertida) ---
+                if ignorar_confrontante_repetido: # Se --x foi passado, REMOVER a repetição.
                     confrontante_atual = ponto_atual.get('<CONFRONTANTE>', '').strip()
                     if confrontante_atual and confrontante_atual == ultimo_confrontante:
                         dados_paragrafo['<CONFRONTANTE>'] = "o mesmo"
                     else:
                         dados_paragrafo['<CONFRONTANTE>'] = confrontante_atual
                         ultimo_confrontante = confrontante_atual
-                else:
+                else: # Comportamento padrão (sem --x): manter o nome completo sempre.
                     dados_paragrafo['<CONFRONTANTE>'] = ponto_atual.get('<CONFRONTANTE>', '')
+                # -----------------------------------------------------------
 
                 # --- INÍCIO DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Geração da String) ---
                 token_ponto = "@@PONTO_NEGRITO@@"
@@ -364,7 +365,8 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             if run_ref is None and paragrafo_ref.runs:
                  run_ref = paragrafo_ref.runs[-1]
             
-            font_ref = "Arial" 
+            # Tenta inferir formatação base (Fallback)
+            font_ref = run_ref.font.name if run_ref and run_ref.font.name else "Arial" 
             size_ref = run_ref.font.size if run_ref and run_ref.font.size else None
             bold_ref = run_ref.bold if run_ref else False
             
@@ -375,13 +377,15 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                     
                     proximo_ponto_nome = pontos[idx + 1].get('<PONTO>', '')
                     
+                    # Cria o novo parágrafo antes do bloco de repetição
+                    # Se for o último parágrafo, usa insert_paragraph_before, senão usa o insert_paragraph_before do parágrafo âncora
                     novo_paragrafo = paragrafo_ancora.insert_paragraph_before('') 
                     novo_paragrafo.style = estilo_referencia
 
                     def apply_base_format(r):
-                        if font_ref: r.font.name = font_ref
+                        r.font.name = font_ref
                         if size_ref: r.font.size = size_ref
-                        if bold_ref: r.bold = True 
+                        if bold_ref: r.bold = bold_ref # Mantém negrito se o texto original do bloco tinha
                         return r
                     
                     partes = bloco_texto_sem_ponto.split(token_ponto)
@@ -391,14 +395,16 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                         apply_base_format(run)
 
                     if len(partes) > 1:
+                        # PONTO de DESTINO: sempre em negrito
                         run = novo_paragrafo.add_run(proximo_ponto_nome)
                         run.bold = True
-                        if font_ref: run.font.name = font_ref
+                        run.font.name = font_ref
                         if size_ref: run.font.size = size_ref
                         
                         run = novo_paragrafo.add_run(partes[1])
                         apply_base_format(run)
             
+            # 4b. Remoção dos parágrafos do bloco de repetição
             for p_remove in paragraphs_to_remove:
                 if p_remove._element.getparent() is not None:
                      p_remove._element.getparent().remove(p_remove._element)
@@ -419,7 +425,7 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
 def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_confrontante_repetido=False):
     """
     Lógica ORIGINAL para processar modelos RTF (manipulação de string).
-    A lógica de confrontante repetido foi adicionada aqui.
+    A lógica de confrontante repetido foi atualizada para a inversão solicitada.
     """
     try:
         print(f"DEBUG: Iniciando processamento do RTF (string-based): {modelo_rtf}")
@@ -482,16 +488,17 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
                 '<UTMY>': next_point.get('<UTMX>', ''), # Troca de UTMX/UTMY foi mantida
             })
 
-            # --- TRATAMENTO: confrontante repetido (AGORA CONDICIONAL) ---
-            if not ignorar_confrontante_repetido:
+            # --- TRATAMENTO: confrontante repetido (Lógica Invertida) ---
+            if ignorar_confrontante_repetido: # Se --x foi passado, REMOVER a repetição (substituir por "o mesmo")
                 current_confrontante = current_point.get('<CONFRONTANTE>', '').strip()
                 if current_confrontante and current_confrontante == last_confrontante:
                     paragraph_data['<CONFRONTANTE>'] = "o mesmo"
                 else:
                     paragraph_data['<CONFRONTANTE>'] = current_confrontante
                     last_confrontante = current_confrontante
-            else:
+            else: # Comportamento padrão (sem --x): manter o nome completo sempre.
                 paragraph_data['<CONFRONTANTE>'] = current_point.get('<CONFRONTANTE>', '')
+            # -----------------------------------------------------------
 
             # Substitui placeholders
             for key, value in paragraph_data.items():
@@ -610,7 +617,7 @@ def selecionar_arquivos_e_processar():
             raise ValueError("Não foi possível carregar os pontos.")
         
         print(f"\n--- Iniciando o processamento do Modelo ({extensao_modelo}) ---")
-        # Chamada da função unificada (padrão para GUI é não ignorar a repetição)
+        # Chamada da função unificada (padrão para GUI é NÃO ignorar a repetição -> manter nomes completos)
         processar_modelo(modelo_caminho, dados_gerais, pontos, saida_caminho, ignorar_confrontante_repetido=False)
         messagebox.showinfo("Sucesso", f"Memorial gerado com sucesso:\n{saida_caminho}")
     except Exception as e:
@@ -621,8 +628,9 @@ def selecionar_arquivos_e_processar():
 def main():
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo DOCX/RTF")
     # ALTERAÇÃO: Argumento simplificado para --x
+    # A flag --x AGORA ATIVA A REMOÇÃO DE REPETIÇÃO ("o mesmo")
     parser.add_argument("--x", action="store_true", 
-                        help="Desativa a substituição de confrontantes repetidos por 'o mesmo'.")
+                        help="Ativa a substituição de confrontantes repetidos por 'o mesmo'.")
                         
     # Argumentos originais
     parser.add_argument("modelo", nargs="?", help="Caminho do Modelo (RTF ou DOCX)")
@@ -653,7 +661,7 @@ def main():
             csv_pontos = args.base + "2.CSV"
             saida_caminho = args.base + extensao 
 
-            print(f"--- MODO SIMPLIFICADO DETECTADO ({'Ignorar Repetição: SIM' if ignorar_rep else 'Ignorar Repetição: NÃO'}) ---")
+            print(f"--- MODO SIMPLIFICADO DETECTADO ({'Remover Repetição: SIM' if ignorar_rep else 'Remover Repetição: NÃO'}) ---")
             print(f"Modelo : {args.modelo}")
             print(f"CSV Gerais : {csv_gerais}")
             print(f"CSV Pontos : {csv_pontos}")
@@ -671,7 +679,7 @@ def main():
 
         # --- MODO COMPLETO (flags antigas) ---
         elif args.modelo and args.csv_pontos and args.csv_gerais and args.saida:
-            print(f"--- MODO COMPLETO DETECTADO ({'Ignorar Repetição: SIM' if ignorar_rep else 'Ignorar Repetição: NÃO'}) ---")
+            print(f"--- MODO COMPLETO DETECTADO ({'Remover Repetição: SIM' if ignorar_rep else 'Remover Repetição: NÃO'}) ---")
             
             dados_gerais = carregar_dados_gerais(args.csv_gerais)
             pontos = carregar_pontos(args.csv_pontos)
