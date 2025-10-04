@@ -44,6 +44,7 @@ def carregar_dados_gerais(caminho_csv):
         print(f"DEBUG: Carregando dados gerais de: {caminho_csv}")
         conteudo = ler_arquivo_com_fallback(caminho_csv)
         # Usando o módulo csv para garantir a separação correta por ponto e vírgula
+        # CORREÇÃO: Removendo o espaço do delimitador. Deve ser apenas um caractere.
         leitor = csv.reader(conteudo.splitlines(), delimiter=';')
     
         linhas_restantes = list(leitor)
@@ -304,8 +305,10 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             bloco_base_string = match_bloco.group(1).replace('<***>', '').strip()
             
             # 3c. Substitui variáveis do primeiro ponto (M01) em qualquer lugar
-            primeiro_ponto = pontos[0]
-            substituir_texto_em_docx(documento, primeiro_ponto)
+            # REMOVIDO: A substituição do primeiro ponto aqui foi removida, pois causava conflito
+            # no fechamento. A substituição do primeiro ponto e do fechamento será feita na etapa 4c.
+            # primeiro_ponto = pontos[0]
+            # substituir_texto_em_docx(documento, primeiro_ponto)
 
             # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO (Lógica de String Original) ---
             print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 1} blocos...")
@@ -327,18 +330,23 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                     '<UTMX>': proximo_ponto.get('<UTMY>', ''),
                     '<UTMY>': proximo_ponto.get('<UTMX>', ''),
                 })
+                
+                # NOVO: Variável para rastreio explícito e consistente
+                confrontante_real = ponto_atual.get('<CONFRONTANTE>', '').strip()
 
-                # --- TRATAMENTO: confrontante repetido (Lógica Invertida) ---
+                # --- TRATAMENTO: confrontante repetido (Lógica Otimizada) ---
                 if ignorar_confrontante_repetido: # Se --x foi passado, REMOVER a repetição.
-                    confrontante_atual = ponto_atual.get('<CONFRONTANTE>', '').strip()
-                    if confrontante_atual and confrontante_atual == ultimo_confrontante:
+                    if confrontante_real and confrontante_real == ultimo_confrontante:
                         dados_paragrafo['<CONFRONTANTE>'] = "o mesmo"
                     else:
-                        dados_paragrafo['<CONFRONTANTE>'] = confrontante_atual
-                        ultimo_confrontante = confrontante_atual
+                        dados_paragrafo['<CONFRONTANTE>'] = confrontante_real
+                    
+                    # Atualiza o rastreador APENAS se a flag de repetição estiver ativa
+                    ultimo_confrontante = confrontante_real
                 else: # Comportamento padrão (sem --x): manter o nome completo sempre.
-                    dados_paragrafo['<CONFRONTANTE>'] = ponto_atual.get('<CONFRONTANTE>', '')
+                    dados_paragrafo['<CONFRONTANTE>'] = confrontante_real
                 # -----------------------------------------------------------
+
 
                 # --- INÍCIO DA CORREÇÃO MANUAL DE RECONSTRUÇÃO (Geração da String) ---
                 token_ponto = "@@PONTO_NEGRITO@@"
@@ -407,7 +415,35 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             # 4b. Remoção dos parágrafos do bloco de repetição
             for p_remove in paragraphs_to_remove:
                 if p_remove._element.getparent() is not None:
-                     p_remove._element.getparent().remove(p_remove._element)
+                       p_remove._element.getparent().remove(p_remove._element)
+
+
+            # 4c. TRATAMENTO DO FECHAMENTO (DOCX)
+            # CORREÇÃO: Nova lógica para tratar a substituição inicial (Ponto de início e Fechamento).
+            print("\nDEBUG: Substituindo chaves de início e fechamento do DOCX...")
+            
+            last_point_of_perimeter = pontos[-1]
+            first_point_name = pontos[0].get('<PONTO>', '')
+
+            # Dados que devem ser preenchidos no Início e Fechamento
+            closing_data = last_point_of_perimeter.copy()
+            
+            # Ponto de destino do fechamento (M01)
+            closing_data['<PONTO>'] = first_point_name 
+            
+            # Número do confronto final
+            closing_data['<CONFRO>'] = f"Confronto {len(pontos)}"
+
+            # Chaves do primeiro ponto (M01)
+            initial_data = pontos[0].copy()
+            
+            # Junta os dados iniciais, dados gerais, e dados de fechamento (último segmento).
+            # A substituição final aplicará a ordem correta.
+            final_substitutions = dados_gerais.copy()
+            final_substitutions.update(initial_data)
+            final_substitutions.update(closing_data)
+            
+            substituir_texto_em_docx(documento, final_substitutions)
 
 
             # 5. Salva o documento
@@ -425,11 +461,11 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
 def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_confrontante_repetido=False):
     """
     Lógica ORIGINAL para processar modelos RTF (manipulação de string).
-    A lógica de confrontante repetido foi atualizada para a inversão solicitada.
     """
     try:
         print(f"DEBUG: Iniciando processamento do RTF (string-based): {modelo_rtf}")
         
+        # Abertura do RTF com encoding compatível
         with open(modelo_rtf, 'r', encoding='windows-1252', errors='ignore') as f:
             texto_modelo = f.read()
 
@@ -450,7 +486,8 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
 
         if not match_bloco or len(pontos) < 2:
             print("\nDEBUG: Bloco de repetição não encontrado ou número de pontos insuficiente. Processando como arquivo simples.")
-            with open(saida_rtf, 'w', encoding='windows-1252') as f:
+            # CORREÇÃO: Adiciona errors='replace' para evitar erro de codificação
+            with open(saida_rtf, 'w', encoding='windows-1252', errors='replace') as f:
                 texto_pronto = texto_pronto.replace('<***>', '')
                 f.write(texto_pronto)
             print(f"DEBUG: Arquivo final salvo em: {saida_rtf}")
@@ -487,17 +524,22 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
                 '<UTMX>': next_point.get('<UTMY>', ''), # Troca de UTMX/UTMY foi mantida
                 '<UTMY>': next_point.get('<UTMX>', ''), # Troca de UTMX/UTMY foi mantida
             })
+            
+            # NOVO: Variável para rastreio explícito e consistente
+            current_confrontante_name = current_point.get('<CONFRONTANTE>', '').strip()
 
-            # --- TRATAMENTO: confrontante repetido (Lógica Invertida) ---
+
+            # --- TRATAMENTO: confrontante repetido (Lógica Otimizada) ---
             if ignorar_confrontante_repetido: # Se --x foi passado, REMOVER a repetição (substituir por "o mesmo")
-                current_confrontante = current_point.get('<CONFRONTANTE>', '').strip()
-                if current_confrontante and current_confrontante == last_confrontante:
+                if current_confrontante_name and current_confrontante_name == last_confrontante:
                     paragraph_data['<CONFRONTANTE>'] = "o mesmo"
                 else:
-                    paragraph_data['<CONFRONTANTE>'] = current_confrontante
-                    last_confrontante = current_confrontante
+                    paragraph_data['<CONFRONTANTE>'] = current_confrontante_name
+                
+                # Rastreia o nome REAL APENAS se a flag de repetição estiver ativa
+                last_confrontante = current_confrontante_name
             else: # Comportamento padrão (sem --x): manter o nome completo sempre.
-                paragraph_data['<CONFRONTANTE>'] = current_point.get('<CONFRONTANTE>', '')
+                paragraph_data['<CONFRONTANTE>'] = current_confrontante_name
             # -----------------------------------------------------------
 
             # Substitui placeholders
@@ -511,19 +553,25 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
 
 
         # --- FECHAMENTO: último ponto voltando para M01 ---
-        # Usa o penúltimo ponto do CSV (pontos[-2]) para o último confronto
-        last_point_of_perimeter = pontos[-2]
+        
+        # O segmento de fechamento (Confronto N) usa os dados do último ponto de origem (pontos[-1], ex: M06) 
+        # para distância/azimute/confrontante, e tem como destino o primeiro ponto (M01).
+        last_point_of_perimeter = pontos[-1]
         first_point = pontos[0]
-        confronto_num = len(pontos) - 1 # Número total de confrontos
-
+        
+        # CORREÇÃO: O número do último confronto deve ser o total de segmentos (que é o número de pontos carregados)
+        confronto_num_fechamento = len(pontos) 
+        
+        # Texto de fechamento a ser substituído/inserido
         closing_text = (
-            f"Confronto {confronto_num}: deste segue confrontando com a propriedade de {last_point_of_perimeter.get('<CONFRONTANTE>', '')}, "
+            f"Confronto {confronto_num_fechamento}: deste segue confrontando com a propriedade de {last_point_of_perimeter.get('<CONFRONTANTE>', '')}, "
             f"com azimute de {last_point_of_perimeter.get('<AZIMUTE>', '')} por uma distância de {last_point_of_perimeter.get('<DISTANCIA>', '')}m, "
             f"até o ponto {first_point.get('<PONTO>', '')}, onde teve início essa descrição."
         )
 
-        print(f"DEBUG: Gerando texto de fechamento do perímetro ({confronto_num}º confronto).")
+        print(f"DEBUG: Gerando texto de fechamento do perímetro ({confronto_num_fechamento}º confronto).")
         
+        # Tenta substituir o bloco completo
         closing_pattern = r"Confronto\s*\d+:\s*deste\s*segue.*?essa\s*descrição\."
         
         texto_depois_final, subs_feitas = re.subn(
@@ -534,20 +582,29 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         )
 
         if subs_feitas == 0:
-            print("DEBUG: Nenhuma frase de fechamento padrão encontrada. Tentando substituição de chaves no texto restante.")
+            print("DEBUG: Nenhuma frase de fechamento padrão encontrada. Aplicando substituições de chaves no texto restante.")
             texto_depois_final = texto_depois
         
-        # Substitui chaves restantes no texto final (Azimute/Distancia/Confrontante do último segmento e o Ponto inicial)
-        texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
+            # Lógica de FALLBACK (GARANTIA DE SUBSTITUIÇÃO FORÇADA):
+            # 1. Substitui o número do confronto (se for chave)
+            if '<CONFRO>' in texto_depois_final:
+                texto_depois_final = texto_depois_final.replace('<CONFRO>', f"Confronto {confronto_num_fechamento}")
+                
+            # 2. Substitui o Ponto de fechamento
+            # Aplicamos <PONTO> antes, se o template original tiver a chave
+            texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
+            
+            # 3. Substitui os dados do último segmento
+            for key, value in last_point_of_perimeter.items():
+                 texto_depois_final = texto_depois_final.replace(key, str(value))
+
         
-        for key, value in last_point_of_perimeter.items():
-             texto_depois_final = texto_depois_final.replace(key, str(value))
-             
         # 5. Monta o texto final
         texto_final = texto_antes + "".join(blocos_gerados) + texto_depois_final
         
         # 6. Salva o arquivo RTF
-        with open(saida_rtf, 'w', encoding='windows-1252') as f:
+        # CORREÇÃO: Adiciona errors='replace' para evitar erro de codificação
+        with open(saida_rtf, 'w', encoding='windows-1252', errors='replace') as f:
             f.write(texto_final)
         print(f"DEBUG: Arquivo final salvo em: {saida_rtf}")
 
@@ -645,7 +702,7 @@ def main():
     
     # Adicionando um aviso se a biblioteca docx não estiver disponível
     if args.modelo and Path(args.modelo).suffix.lower() == '.docx' and Document is MockDocument:
-         print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX NÃO funcionará.", file=sys.stderr)
+           print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX NÃO funcionará.", file=sys.stderr)
 
     try:
         # --- MODO SIMPLIFICADO ---
