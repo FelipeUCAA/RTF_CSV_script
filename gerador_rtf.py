@@ -304,12 +304,6 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             
             bloco_base_string = match_bloco.group(1).replace('<***>', '').strip()
             
-            # 3c. Substitui variáveis do primeiro ponto (M01) em qualquer lugar
-            # REMOVIDO: A substituição do primeiro ponto aqui foi removida, pois causava conflito
-            # no fechamento. A substituição do primeiro ponto e do fechamento será feita na etapa 4c.
-            # primeiro_ponto = pontos[0]
-            # substituir_texto_em_docx(documento, primeiro_ponto)
-
             # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO (Lógica de String Original) ---
             print(f"\nDEBUG: Encontrado bloco base de repetição. Gerando {len(pontos) - 1} blocos...")
             
@@ -331,16 +325,30 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                     '<UTMY>': proximo_ponto.get('<UTMX>', ''),
                 })
                 
-                # NOVO: Variável para rastreio explícito e consistente
                 confrontante_real = ponto_atual.get('<CONFRONTANTE>', '').strip()
+                
+                # CORREÇÃO: Novo Padrão regex para REMOVER APENAS A PARTE DO CONFRONTANTE, MANTENDO "deste segue"
+                # A regex procura por " confrontando com a propriedade de <CONFRONTANTE>" e pontuação seguinte.
+                padrao_remover_frase = r"\s*confrontando\s*com\s*a\s*propriedade\s*de\s*<CONFRONTANTE>\s*[,\.]*"
 
-                # --- TRATAMENTO: confrontante repetido (Lógica Otimizada) ---
+
+                # --- TRATAMENTO: confrontante repetido (Lógica para remover frase completa) ---
                 if ignorar_confrontante_repetido: # Se --x foi passado, REMOVER a repetição.
                     if confrontante_real and confrontante_real == ultimo_confrontante:
-                        dados_paragrafo['<CONFRONTANTE>'] = "o mesmo"
+                        
+                        # Tenta remover APENAS A PARTE DO CONFRONTANTE
+                        bloco_formatado, subs = re.subn(padrao_remover_frase, "", bloco_formatado, flags=re.IGNORECASE)
+
+                        if subs > 0:
+                            # Se a frase parcial foi removida, a chave <CONFRONTANTE> não existe mais no bloco.
+                            dados_paragrafo['<CONFRONTANTE>'] = "" # Valor irrelevante
+                            print(f"DEBUG DOCX: Parte do confrontante removida (mantendo 'deste segue') no confronto {idx+1}.")
+                        else:
+                            # Fallback para o comportamento anterior: substitui a chave por "o mesmo"
+                            dados_paragrafo['<CONFRONTANTE>'] = "o mesmo" 
                     else:
                         dados_paragrafo['<CONFRONTANTE>'] = confrontante_real
-                    
+                        
                     # Atualiza o rastreador APENAS se a flag de repetição estiver ativa
                     ultimo_confrontante = confrontante_real
                 else: # Comportamento padrão (sem --x): manter o nome completo sempre.
@@ -353,6 +361,7 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                 bloco_formatado_sem_ponto = bloco_formatado.replace('<PONTO>', token_ponto)
                 
                 for chave, valor in dados_paragrafo.items():
+                    # Certifica-se de que a substituição de CONFRONTANTE usa o valor ajustado (pode ser "" ou "o mesmo")
                     if chave == '<PONTO>': continue 
                     bloco_formatado_sem_ponto = bloco_formatado_sem_ponto.replace(chave, str(valor))
 
@@ -371,7 +380,7 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
                     run_ref = r
                     break
             if run_ref is None and paragrafo_ref.runs:
-                 run_ref = paragrafo_ref.runs[-1]
+                run_ref = paragrafo_ref.runs[-1]
             
             # Tenta inferir formatação base (Fallback)
             font_ref = run_ref.font.name if run_ref and run_ref.font.name else "Arial" 
@@ -415,7 +424,7 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
             # 4b. Remoção dos parágrafos do bloco de repetição
             for p_remove in paragraphs_to_remove:
                 if p_remove._element.getparent() is not None:
-                       p_remove._element.getparent().remove(p_remove._element)
+                        p_remove._element.getparent().remove(p_remove._element)
 
 
             # 4c. TRATAMENTO DO FECHAMENTO (DOCX)
@@ -527,15 +536,29 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
             
             # NOVO: Variável para rastreio explícito e consistente
             current_confrontante_name = current_point.get('<CONFRONTANTE>', '').strip()
+            
+            # CORREÇÃO: Novo Padrão regex para REMOVER APENAS A PARTE DO CONFRONTANTE, MANTENDO "deste segue"
+            # A regex procura por " confrontando com a propriedade de <CONFRONTANTE>" e pontuação seguinte.
+            padrao_remover_frase = r"\s*confrontando\s*com\s*a\s*propriedade\s*de\s*<CONFRONTANTE>\s*[,\.]*"
 
 
-            # --- TRATAMENTO: confrontante repetido (Lógica Otimizada) ---
-            if ignorar_confrontante_repetido: # Se --x foi passado, REMOVER a repetição (substituir por "o mesmo")
+            # --- TRATAMENTO: confrontante repetido (Lógica para remover frase completa) ---
+            if ignorar_confrontante_repetido: 
                 if current_confrontante_name and current_confrontante_name == last_confrontante:
-                    paragraph_data['<CONFRONTANTE>'] = "o mesmo"
+                    
+                    # Tenta remover a frase parcial
+                    formatted_block, subs = re.subn(padrao_remover_frase, "", formatted_block, flags=re.IGNORECASE)
+
+                    if subs > 0:
+                        # Se a frase parcial foi removida
+                        paragraph_data['<CONFRONTANTE>'] = ""
+                        print(f"DEBUG RTF: Parte do confrontante removida (mantendo 'deste segue') no confronto {idx+1}.")
+                    else:
+                        # Fallback: substitui a chave por "o mesmo"
+                        paragraph_data['<CONFRONTANTE>'] = "o mesmo"
                 else:
                     paragraph_data['<CONFRONTANTE>'] = current_confrontante_name
-                
+                    
                 # Rastreia o nome REAL APENAS se a flag de repetição estiver ativa
                 last_confrontante = current_confrontante_name
             else: # Comportamento padrão (sem --x): manter o nome completo sempre.
@@ -685,9 +708,9 @@ def selecionar_arquivos_e_processar():
 def main():
     parser = argparse.ArgumentParser(description="Gerador de Memorial Descritivo DOCX/RTF")
     # ALTERAÇÃO: Argumento simplificado para --x
-    # A flag --x AGORA ATIVA A REMOÇÃO DE REPETIÇÃO ("o mesmo")
+    # A flag --x AGORA ATIVA A REMOÇÃO DE REPETIÇÃO ("o mesmo") ou da frase completa.
     parser.add_argument("--x", action="store_true", 
-                        help="Ativa a substituição de confrontantes repetidos por 'o mesmo'.")
+                        help="Ativa a substituição/remoção de confrontantes repetidos.")
                         
     # Argumentos originais
     parser.add_argument("modelo", nargs="?", help="Caminho do Modelo (RTF ou DOCX)")
@@ -702,7 +725,7 @@ def main():
     
     # Adicionando um aviso se a biblioteca docx não estiver disponível
     if args.modelo and Path(args.modelo).suffix.lower() == '.docx' and Document is MockDocument:
-           print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX NÃO funcionará.", file=sys.stderr)
+            print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX NÃO funcionará.", file=sys.stderr)
 
     try:
         # --- MODO SIMPLIFICADO ---
