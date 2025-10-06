@@ -1,113 +1,165 @@
-DOCX/RTF Descriptive Memorial Generator
-A robust Python script designed to automate the creation of Descriptive Memorial documents from a Microsoft Word template (.docx, .rtf) and structured tabular data (.csv) containing point information and general details.
+📘 DOCX/RTF Descriptive Memorial Generator
 
-The tool is designed to be executed via the command line, making it ideal for integration with surveying systems like TopoCAD 2000.
+A robust and flexible Python-based tool that automates the generation of Descriptive Memorial documents from a Microsoft Word (.docx or .rtf) template and structured tabular data (.csv) containing general information and perimeter point data.
 
-🚀 How to Use (Via Command Line)
-The standard execution requires you to pass the file path of the document template and the base path of the data files (CSVs) as arguments.
+This tool is designed for seamless integration with surveying workflows (e.g., TopoCAD 2000) and can operate both in Command Line Mode and Graphical Mode (GUI).
 
-Prerequisites
-No Python installation or external library installation is required for the end-user if you are distributing a bundled executable (.exe).
+🚀 Features
 
-Execution Syntax (Recommended)
-Run the script (e.g., memorial_generator.exe or memorial_generator.py) followed by the required arguments and any optional flags:
+Supports both .DOCX and .RTF templates.
 
-# Execution Syntax (Standard/Default)
-my_script.exe <PATH_TO_TEMPLATE> <CSV_BASE_PATH>
+Automatic detection of General Data CSV and Point Data CSV.
 
-# Execution with Optional Flag (Disabling repetition of 'o mesmo')
-my_script.exe <PATH_TO_TEMPLATE> <CSV_BASE_PATH> --nao_repetir_confrontante
+Preserves font styles, sizes, and bold formatting from the template.
 
-Practical Example:
+Offers CLI (command-line) and GUI (interactive) execution modes.
 
-If your files are: C:\Projects\Template.docx, C:\Projects\Data_1.csv, and C:\Projects\Data_2.csv.
+Generates a fully formatted descriptive memorial automatically.
 
-my_script.exe C:\Projects\Template.docx C:\Projects\Data
+⚙️ Execution Modes
+🖥️ 1. Graphical Interface (Default Mode)
 
-The script will automatically look for C:\Projects\Data1.csv and C:\Projects\Data2.csv, and save the resulting document as C:\Projects\Data.docx.
+If you run the script without arguments, it automatically launches an interactive graphical window that allows you to manually select:
 
-⚙️ Technical Details and Command Options
-Control of Repeated Confrontants (Optional)
-The handling of repetitive adjacent confronting properties is conditional, controlled by the main argument:
+The template file (.docx or .rtf)
 
-Behavior
+The general data CSV file
 
-Description
+The point data CSV file
 
-Argument
+The destination path for the generated document
 
-Default
+py gerador_rtf.py
+# or
+gerador_rtf.exe
 
-If the confrontant name is the same as the previous segment, it is replaced by the phrase "o mesmo".
+💻 2. Command Line Mode
 
-None
+If you prefer automation or need to integrate the generator with external systems (like TopoCAD), you can execute it directly with arguments.
 
-Optional
+Syntax
+my_script.exe <PATH_TO_TEMPLATE> <CSV_BASE_PATH> [options]
 
-The full confrontant name from the CSV is repeated for every segment, regardless of similarity.
+Example
+my_script.exe "C:\Projects\Template.docx" "C:\Projects\Data"
 
---nao_repetir_confrontante
 
-Formatting Assurance (DOCX Only)
-The code ensures formatting integrity in the generated paragraphs:
+The script will automatically read:
 
-Font and Size: The script copies the exact font family and font size from the reference paragraph in the template and applies them to all newly generated text runs.
+C:\Projects\Data1.csv → General data
 
-Boldness: Point data (<PONTO>) is explicitly preserved in bold across all generated blocks, aligning with the template's requirements.
+C:\Projects\Data2.csv → Perimeter point data
 
-Other Technical Details
-Block Processing: The section between <***> and <***> is repeated for each perimeter segment (N-1 repetitions).
+And generate:
 
-Final Output: The final document ends after the last successfully generated repetition block.
+C:\Projects\Data.docx → Final descriptive memorial document.
 
-📂 Required Input File Structure
-The script expects your input data to be organized into three main files:
+⚙️ Optional Flags
+Argument	Description	Default
+--nao_repetir_confrontante	Disables automatic replacement of repeated confronting names (“o mesmo”).	False
+--x	Forces CLI mode even if no arguments are detected (useful for testing).	False
+Example with both options:
+my_script.exe "C:\Users\lipin\Downloads\MODELO (1).docx" "C:\Users\lipin\Downloads\TESTE-MOD" --x --nao_repetir_confrontante
 
-1. Document Template (.docx or .rtf)
-This file must contain the placeholders (substitution markers) in <KEY> format:
 
-Data Type
+This command:
 
-Placeholder Example
+Uses the specified DOCX template.
 
-Usage
+Reads data from:
 
-General
+TESTE-MOD1.csv (general data)
 
-<IMOVEL>, <PERIMETRO>, <MUNICIPIO>, <RESPONSAVEL>
+TESTE-MOD2.csv (point data)
 
-Header and Footer information.
+Generates the memorial document automatically in the same directory.
 
-Point Data
+🧱 Input File Requirements
+1. Template File (.docx or .rtf)
 
-<PONTO>, <AZIMUTE>, <DISTANCIA>, <CONFRONTANTE>, <UTMX>, <UTMY>
+Contains substitution placeholders enclosed in < > brackets.
+Example:
 
-Repetition Block, Opening, and Closing description.
-
-Repetition Block
-
+<IMOVEL> - <MUNICIPIO>
+Azimuth: <AZIMUTE> - Distance: <DISTANCIA>m - Point: <PONTO>
+Confrontant: <CONFRONTANTE>
+<***>
+... repeating section ...
 <***>
 
-Marks the start and end of the text block that will be repeated for each segment of the perimeter.
+Supported Placeholders
+Category	Example	Description
+General	<IMOVEL>, <PERIMETRO>, <MUNICIPIO>, <RESPONSAVEL>	Header and document metadata
+Point Data	<PONTO>, <AZIMUTE>, <DISTANCIA>, <CONFRONTANTE>, <UTMX>, <UTMY>	Used in repetition block
+Repetition Block	<***>	Defines section to repeat for each segment
+2. General Data CSV (<BASE_PATH>1.csv)
 
-2. General Data CSV (<CSV_BASE_PATH>1.csv)
-Format: <KEY>;<VALUE>
+Format: KEY;VALUE
+Example:
 
-Column A (Key)
+<IMOVEL>;SÍTIO ALEGRIA
+<AREA_M2>;19742,5
+<DATA>;23/07/2025
 
-Column B (Value)
+3. Point Data CSV (<BASE_PATH>2.csv)
 
-<IMOVEL>
+Contains the list of perimeter points, one per row.
+Example:
 
-SITIO ALEGRIA
+<PONTO>;<AZIMUTE>;<DISTANCIA>;<CONFRONTANTE>;<UTMX>;<UTMY>
+M01;45°30'00";125.6;JOÃO SILVA;756321.44;9102234.55
+M02;130°45'15";210.2;O MESMO;756444.11;9102445.10
+...
 
-<AREAM2>
+🧩 Document Generation Details
 
-19,7425
+The section between <***> markers is repeated for each perimeter segment (N-1 times).
 
-<DATA>
+The final paragraph is automatically closed with the return to the first point:
 
-23/07/2025
+... until point M01, where this description began.
 
-3. Point Data CSV (<CSV_BASE_PATH>2.csv)
-This file must contain the header row (<PONTO>;<DISTANCIA>;<AZIMUTE>;...) followed by the list of vertices. The script automatically manages the order of the confrontations.
+
+If --nao_repetir_confrontante is not passed, the script replaces repeated confronting names with “o mesmo” automatically.
+
+🧠 Technical Notes
+
+The generator ensures font consistency by cloning styles (family, size, and bold attributes) from the reference paragraph in the DOCX template.
+
+RTF templates are supported with minimal formatting guarantees.
+
+The script works fully offline and requires no installation if distributed as a .exe file.
+
+📦 Distribution (Optional)
+
+If you plan to share the tool:
+
+Build it into a standalone .exe with PyInstaller:
+
+pyinstaller --onefile --clean --noconfirm gerador_rtf.py
+
+
+(Optional) Compress it using UPX
+ for a smaller size:
+
+pyinstaller --onefile --clean --noconfirm --upx-dir C:\path\to\upx gerador_rtf.py
+
+
+Distribute the .exe along with this README and example CSV/template files.
+
+🧾 Example Full Command
+gerador_rtf.exe "C:\Users\lipin\Downloads\MODELO (1).docx" "C:\Users\lipin\Downloads\TESTE-MOD" --x
+
+
+✅ This will generate:
+
+C:\Users\lipin\Downloads\TESTE-MOD.docx
+
+
+Using:
+
+Template → MODELO (1).docx
+
+General Data → TESTE-MOD1.csv
+
+Point Data → TESTE-MOD2.csv
