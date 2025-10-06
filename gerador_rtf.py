@@ -467,6 +467,19 @@ def processar_modelo(caminho_modelo, dados_gerais, pontos, saida_caminho, ignora
         pass 
 
 
+# NOVO: Função auxiliar para criar um padrão regex flexível que ignora códigos RTF
+# Este é o mecanismo necessário para garantir que a frase seja encontrada mesmo com formatação RTF dispersa.
+def criar_padrao_rtf_flexivel(texto_alvo):
+    padrao = ''
+    for letra in texto_alvo:
+        if letra.isspace():
+            padrao += r'\s*' # Permite qualquer quantidade de espaços (incluindo quebras de linha)
+        else:
+            # Permite que o caractere literal seja fragmentado por códigos RTF (como \cf1, \b, etc.)
+            padrao += re.escape(letra) + r'(?:\\[a-z]+\d* ?|[\s{}])*?'
+    return padrao
+
+
 def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_confrontante_repetido=False):
     """
     Lógica ORIGINAL para processar modelos RTF (manipulação de string).
@@ -481,15 +494,16 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         if not texto_modelo:
             raise ValueError("O arquivo modelo RTF está vazio ou não pôde ser lido.")
         
+        # 1. Normaliza as chaves (placeholders)
         chaves = list(dados_gerais.keys()) + list(pontos[0].keys()) + ['<***>', '<CONFRO>']
         texto_pronto = normalizar_chaves_rtf(texto_modelo, chaves)
         
-        # 1. Substitui apenas os dados gerais
+        # 2. Substitui apenas os dados gerais
         print("\nDEBUG: Substituindo dados gerais...")
         for chave, valor in dados_gerais.items():
             texto_pronto = texto_pronto.replace(chave, str(valor))
 
-        # 2. Encontra o bloco de repetição
+        # 3. Encontra o bloco de repetição
         padrao_bloco = r"(?s)<\*\*\*>(.*?)<\*\*\*>"
         match_bloco = re.search(padrao_bloco, texto_pronto)
 
@@ -519,6 +533,12 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
         
         last_confrontante = None
 
+        # CORREÇÃO RTF: Cria o padrão flexível uma única vez.
+        # A regex procura por " confrontando com a propriedade de <CONFRONTANTE>" e pontuação seguinte.
+        frase_alvo_rtf = " confrontando com a propriedade de <CONFRONTANTE>"
+        padrao_remover_frase = criar_padrao_rtf_flexivel(frase_alvo_rtf) + r'\s*[,\.]*'
+
+
         for idx in range(len(pontos) - 1):
             current_point = pontos[idx]
             next_point = pontos[idx + 1]
@@ -537,17 +557,13 @@ def processar_rtf_string(modelo_rtf, dados_gerais, pontos, saida_rtf, ignorar_co
             # NOVO: Variável para rastreio explícito e consistente
             current_confrontante_name = current_point.get('<CONFRONTANTE>', '').strip()
             
-            # CORREÇÃO: Novo Padrão regex para REMOVER APENAS A PARTE DO CONFRONTANTE, MANTENDO "deste segue"
-            # A regex procura por " confrontando com a propriedade de <CONFRONTANTE>" e pontuação seguinte.
-            padrao_remover_frase = r"\s*confrontando\s*com\s*a\s*propriedade\s*de\s*<CONFRONTANTE>\s*[,\.]*"
-
-
             # --- TRATAMENTO: confrontante repetido (Lógica para remover frase completa) ---
             if ignorar_confrontante_repetido: 
                 if current_confrontante_name and current_confrontante_name == last_confrontante:
                     
-                    # Tenta remover a frase parcial
-                    formatted_block, subs = re.subn(padrao_remover_frase, "", formatted_block, flags=re.IGNORECASE)
+                    # Tenta remover a frase parcial usando o padrão flexível de RTF
+                    # FLAG DOTALL adicionada para garantir que funcione em múltiplas linhas se houver quebras de linha RTF.
+                    formatted_block, subs = re.subn(padrao_remover_frase, "", formatted_block, flags=re.IGNORECASE | re.DOTALL)
 
                     if subs > 0:
                         # Se a frase parcial foi removida
