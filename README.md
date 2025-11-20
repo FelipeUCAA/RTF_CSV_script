@@ -8,7 +8,7 @@ This tool is designed for seamless integration with surveying workflows (e.g., T
 
 Supports both .DOCX and .RTF templates.
 
-Automatic detection of General Data CSV and Point Data CSV.
+Automatic detection of General Data CSV and Point Data CSV on the same file.
 
 Preserves font styles, sizes, and bold formatting from the template.
 
