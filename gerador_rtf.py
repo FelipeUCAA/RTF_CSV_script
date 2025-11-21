@@ -24,6 +24,7 @@ try:
     from docx.oxml import OxmlElement
     from copy import deepcopy # Necessário para a cópia segura de elementos XML
 except ImportError:
+    # Esta exceção é esperada caso o python-docx não esteja instalado.
     Document = MockDocument
 
 
@@ -73,8 +74,10 @@ def carregar_todos_os_conjuntos(caminho_csv):
             for i, linha in enumerate(bloco_linhas):
                 # Tenta usar o leitor CSV para garantir o delimitador e aspas
                 try:
-                    campos = next(csv.reader([linha], delimiter=';'))
+                    # Tenta ler com delimitador ';'. Assume o formato do arquivo original.
+                    campos = next(csv.reader([linha], delimiter=';')) 
                     campos = [campo.strip().strip('"') for campo in campos]
+                    # Limpa campos vazios no final
                     while campos and not campos[-1]:
                         campos.pop()
                 except Exception:
@@ -134,7 +137,7 @@ def carregar_todos_os_conjuntos(caminho_csv):
             if len(pontos) < 2:
                 print(f"AVISO: Bloco {idx_bloco + 1} sem pontos de perímetro (ou menos de 2), mas com dados gerais. Será processado como arquivo simples.")
                 
-            # Lógica para evitar ponto final duplicado
+            # Lógica para evitar ponto final duplicado (se o último ponto for igual ao primeiro)
             if len(pontos) > 1 and pontos[0].get('<PONTO>') == pontos[-1].get('<PONTO>'):
                 pontos.pop()
                 
@@ -157,17 +160,25 @@ def carregar_todos_os_conjuntos(caminho_csv):
 # --- Funções Auxiliares (Lógica de Substituição de Texto) ---
 
 def normalizar_chaves_rtf(texto_rtf, chaves):
-    # Mantida
+    """
+    Normaliza as chaves no texto RTF, removendo códigos de formatação 
+    quebras de linha/espaços que o editor pode ter inserido dentro da chave.
+    """
     for chave in chaves:
         padrao = ''
         for letra in chave:
+            # Captura a letra, seguida por zero ou mais sequências de códigos RTF (\pard, \b0, etc.), 
+            # espaços, ou chaves de agrupamento (quebra o token)
             padrao += re.escape(letra) + r'(?:\\[a-z]+\d* ?|[\s{}])*?'
         padrao_regex = re.compile(padrao, flags=re.IGNORECASE)
         texto_rtf = padrao_regex.sub(chave, texto_rtf)
     return texto_rtf
 
 def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
-    # Mantida
+    """
+    Substitui um placeholder em um parágrafo do DOCX, mantendo a formatação
+    original do texto que o envolve.
+    """
     if placeholder not in paragraph.text:
         return
 
@@ -206,13 +217,22 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
     prefix_text = start_run.text[:start_offset]
     suffix_text = end_run.text[end_offset:]
     
+    # 1. Caso a chave esteja em uma única run
     if start_run_index == end_run_index:
         start_run.text = prefix_text + str(replacement) + suffix_text
     else:
+        # 2. Caso a chave esteja distribuída por múltiplas runs
+        # Substitui o início da run inicial
         start_run.text = prefix_text + str(replacement)
+        
+        # Limpa as runs intermediárias
         for i in range(start_run_index + 1, end_run_index):
             paragraph.runs[i].clear()
+            
+        # Substitui o final da run final
         end_run.text = suffix_text
+        
+        # Limpa runs vazias que sobraram
         for i in range(len(paragraph.runs) - 1, -1, -1):
             if not paragraph.runs[i].text:
                 p = paragraph._element
@@ -221,7 +241,10 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
 
 
 def substituir_texto_em_docx(estrutura, dados_substituicao):
-    # Adaptada para aceitar a estrutura (documento ou célula)
+    """
+    Aplica as substituições em todos os parágrafos e tabelas da estrutura fornecida
+    (Documento ou Célula de Tabela).
+    """
     def substituir_em_estrutura_recursiva(estrutura):
         for paragrafo in estrutura.paragraphs:
             for chave, valor in dados_substituicao.items():
@@ -235,14 +258,17 @@ def substituir_texto_em_docx(estrutura, dados_substituicao):
                 for celula in linha.cells:
                     substituir_em_estrutura_recursiva(celula)
                 
-# NOVO: Função auxiliar para criar um padrão regex flexível que ignora códigos RTF
 def criar_padrao_rtf_flexivel(texto_alvo):
-    # Mantida
+    """
+    Cria um padrão regex flexível que ignora códigos RTF, usado para 
+    localizar o trecho de "confrontante repetido" no bloco de repetição.
+    """
     padrao = ''
     for letra in texto_alvo:
         if letra.isspace():
             padrao += r'\s*' 
         else:
+            # Captura a letra, seguida por zero ou mais sequências de códigos RTF ou chaves
             padrao += re.escape(letra) + r'(?:\\[a-z]+\d* ?|[\s{}])*?'
     return padrao
 
@@ -253,14 +279,15 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
     Processa um ÚNICO memorial RTF e retorna a STRING do conteúdo.
     """
     try:
-        with open(modelo_rtf, 'r', encoding='windows-1252', errors='ignore') as f:
-            texto_modelo = f.read()
+        # Tenta ler o RTF com uma codificação segura
+        texto_modelo = Path(modelo_rtf).read_text(encoding='windows-1252', errors='ignore')
 
         if not texto_modelo:
             raise ValueError("O arquivo modelo RTF está vazio ou não pôde ser lido.")
         
-        chaves = list(dados_gerais.keys()) + list(pontos[0].keys() if pontos else []) + ['<***>', '<CONFRO>']
-        texto_pronto = normalizar_chaves_rtf(texto_modelo, chaves)
+        # 0. Normalização das chaves do template (para aguentar chaves quebradas por formatação)
+        chaves_a_normalizar = list(dados_gerais.keys()) + list(pontos[0].keys() if pontos else []) + ['<***>', '<CONFRO>']
+        texto_pronto = normalizar_chaves_rtf(texto_modelo, chaves_a_normalizar)
         
         # 1. Substitui dados gerais (em todo o documento)
         for chave, valor in dados_gerais.items():
@@ -271,6 +298,7 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
         match_bloco = re.search(padrao_bloco, texto_pronto)
 
         if not match_bloco or len(pontos) < 2:
+            # Caso não haja bloco de repetição ou pontos suficientes, remove a chave de bloco
             texto_pronto = texto_pronto.replace('<***>', '')
             return texto_pronto # Retorna o bloco simples
 
@@ -281,6 +309,7 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
         blocos_gerados = []
         
         # --- ABERTURA: substitui variáveis do primeiro ponto (M01) no texto antes do bloco ---
+        # Isso garante que a descrição inicial do M01 seja preenchida corretamente
         first_point = pontos[0]
         for key, value in first_point.items():
             texto_antes = texto_antes.replace(key, str(value))
@@ -288,6 +317,7 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
         # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO ---
         last_confrontante = None
         frase_alvo_rtf = " confrontando com a propriedade de <CONFRONTANTE>"
+        # O padrão é usado para encontrar e remover a frase RTF, ignorando códigos de formatação.
         padrao_remover_frase = criar_padrao_rtf_flexivel(frase_alvo_rtf) + r'\s*[,\.]*'
 
         for idx in range(len(pontos) - 1):
@@ -297,8 +327,11 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
 
             formatted_block = bloco_base[:]
             paragraph_data = current_point.copy()
+            
+            # Adiciona os dados do ponto de destino para substituição
             paragraph_data.update({
                 '<PONTO>': next_point.get('<PONTO>', ''),
+                # Inverte UTM, se o modelo for baseado em UTM. Mantido do original.
                 '<UTMX>': next_point.get('<UTMY>', ''),
                 '<UTMY>': next_point.get('<UTMX>', ''),
             })
@@ -307,6 +340,7 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
             # Tratamento de Confrontante Repetido
             if ignorar_confrontante_repetido: 
                 if current_confrontante_name and current_confrontante_name == last_confrontante:
+                    # Remove a frase inteira "confrontando com a propriedade de <CONFRONTANTE>" do RTF
                     formatted_block, subs = re.subn(padrao_remover_frase, "", formatted_block, flags=re.IGNORECASE | re.DOTALL)
                     if subs > 0:
                         paragraph_data['<CONFRONTANTE>'] = ""
@@ -318,6 +352,7 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
             else: 
                 paragraph_data['<CONFRONTANTE>'] = current_confrontante_name
 
+            # Realiza as substituições no bloco gerado
             for key, value in paragraph_data.items():
                 formatted_block = formatted_block.replace(key, str(value))
 
@@ -326,29 +361,26 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
 
             blocos_gerados.append(formatted_block)
 
-        # --- FECHAMENTO: último ponto voltando para M01 ---
+        # --- FECHAMENTO: usa substituição de placeholder no texto_depois ---
         last_point_of_perimeter = pontos[-1]
         first_point = pontos[0]
         confronto_num_fechamento = len(pontos) 
         
-        closing_text = (
-            f"Confronto {confronto_num_fechamento}: deste segue confrontando com a propriedade de {last_point_of_perimeter.get('<CONFRONTANTE>', '')}, "
-            f"com azimute de {last_point_of_perimeter.get('<AZIMUTE>', '')} por uma distância de {last_point_of_perimeter.get('<DISTANCIA>', '')}m, "
-            f"até o ponto {first_point.get('<PONTO>', '')}, onde teve início essa descrição."
-        )
+        texto_depois_final = texto_depois[:]
         
-        closing_pattern = r"Confronto\s*\d+:\s*deste\s*segue.*?essa\s*descrição\."
-        texto_depois_final, subs_feitas = re.subn(closing_pattern, closing_text, texto_depois, flags=re.DOTALL | re.IGNORECASE)
+        # 1. Substitui dados do ÚLTIMO ponto (Azimute, Distância, Confrontante)
+        for key, value in last_point_of_perimeter.items():
+            # A chave <PONTO> aqui é a do último ponto, mas será sobrescrita abaixo
+            texto_depois_final = texto_depois_final.replace(key, str(value))
+        
+        # 2. Substitui <PONTO> (deve ser o ponto de partida M01)
+        texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
 
-        if subs_feitas == 0:
-            texto_depois_final = texto_depois
-            if '<CONFRO>' in texto_depois_final:
-                texto_depois_final = texto_depois_final.replace('<CONFRO>', f"Confronto {confronto_num_fechamento}")
-            texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
-            for key, value in last_point_of_perimeter.items():
-                 texto_depois_final = texto_depois_final.replace(key, str(value))
-
-        # 5. Monta o texto final
+        # 3. Substitui a chave de Confronto Final (se existir)
+        if '<CONFRO>' in texto_depois_final:
+            texto_depois_final = texto_depois_final.replace('<CONFRO>', f"Confronto {confronto_num_fechamento}")
+            
+        # 4. Monta o texto final
         texto_final = texto_antes + "".join(blocos_gerados) + texto_depois_final
         return texto_final
 
@@ -380,6 +412,7 @@ def processar_docx_bloco(caminho_modelo, dados_gerais, pontos, ignorar_confronta
     if start_index != -1:
         for i in range(start_index, len(documento.paragraphs)):
             p = documento.paragraphs[i]
+            # Tenta encontrar o final do bloco, que pode estar no mesmo parágrafo ou no próximo
             if p.text.count('<***>') >= 2 or (i > start_index and '<***>' in p.text):
                 end_index = i
                 break
@@ -460,7 +493,7 @@ def processar_docx_bloco(caminho_modelo, dados_gerais, pontos, ignorar_confronta
     estilo_referencia = paragrafo_ref.style
     
     # Tenta inferir formatação base
-    run_ref = next((r for r in paragrafo_ref.runs if r.text.strip()), None) or paragrafo_ref.runs[-1]
+    run_ref = next((r for r in paragrafo_ref.runs if r.text.strip()), None) or (paragrafo_ref.runs[-1] if paragrafo_ref.runs else None)
     font_ref = run_ref.font.name if run_ref and run_ref.font.name else "Arial" 
     size_ref = run_ref.font.size if run_ref and run_ref.font.size else None
     bold_ref = run_ref.bold if run_ref else False
@@ -474,8 +507,10 @@ def processar_docx_bloco(caminho_modelo, dados_gerais, pontos, ignorar_confronta
             novo_paragrafo.style = estilo_referencia
 
             def apply_base_format(r):
+                # Tenta copiar a formatação base, mas garante o nome da fonte
                 r.font.name = font_ref
                 if size_ref: r.font.size = size_ref
+                # Se a run de referência era negrito, aplica a todas as runs de conteúdo
                 if bold_ref: r.bold = bold_ref
                 return r
             
@@ -500,6 +535,7 @@ def processar_docx_bloco(caminho_modelo, dados_gerais, pontos, ignorar_confronta
 
 
     # 4c. TRATAMENTO DO FECHAMENTO (DOCX)
+    # Garante que os placeholders restantes (geralmente no final) sejam preenchidos
     last_point_of_perimeter = pontos[-1]
     first_point_name = pontos[0].get('<PONTO>', '')
     closing_data = last_point_of_perimeter.copy()
@@ -518,6 +554,8 @@ def processar_docx_bloco(caminho_modelo, dados_gerais, pontos, ignorar_confronta
 def processar_modelo(caminho_modelo, todos_conjuntos, saida_caminho, ignorar_confrontante_repetido=False):
     """
     Processa o modelo com MÚLTIPLOS conjuntos de dados e salva em um único arquivo de saída.
+    CORREÇÃO RTF: Implementa uma lógica mais robusta para extrair e combinar o corpo do RTF, 
+    garantindo que o cabeçalho/rodapé seja apenas do primeiro bloco.
     """
     caminho_modelo_path = Path(caminho_modelo)
     extensao = caminho_modelo_path.suffix.lower()
@@ -528,23 +566,84 @@ def processar_modelo(caminho_modelo, todos_conjuntos, saida_caminho, ignorar_con
 
     # --- Lógica RTF (Concatenação de Strings) ---
     if extensao == '.rtf':
-        texto_final = ""
         print(f"\n--- Iniciando Geração do RTF de Múltiplos Memoriais ({len(todos_conjuntos)} total) ---")
         
-        for idx, (dados_gerais, pontos) in enumerate(todos_conjuntos):
-            try:
-                if idx > 0:
-                    texto_final += r'\page ' # Adiciona quebra de página RTF
-                    
-                # Processa o conteúdo de um único memorial
-                texto_memorial = processar_rtf_string_content(caminho_modelo, dados_gerais, pontos, ignorar_confrontante_repetido)
-                texto_final += texto_memorial
-            except Exception as e:
-                print(f"ERRO: Falha ao processar o bloco {idx + 1} (RTF). Ignorando. Detalhes: {e}")
+        def extrair_corpo_rtf(texto_rtf):
+            """
+            Remove a chave RTF de abertura ({\rtf1...}) e a chave de fechamento final (})
+            do bloco RTF gerado.
+            """
+            # 1. Remove a chave de fechamento final '}' e espaços/novas linhas
+            texto_sem_fim = re.sub(r'\}\s*$', '', texto_rtf.strip())
+            
+            # 2. Remove o cabeçalho RTF de abertura '{\rtf1...' (procurando pelo \rtf1 até um espaço ou {)
+            # O .*? garante que pegamos o mínimo necessário até o primeiro \s ou { após o \rtf1
+            match_inicio = re.match(r'\{\\rtf1.*?\s*', texto_sem_fim, re.DOTALL | re.IGNORECASE)
+            
+            if match_inicio:
+                corpo = texto_sem_fim[match_inicio.end():]
+                # Remove o que possa ter sobrado da chave de abertura após o \rtf1
+                return corpo.lstrip('{').lstrip()
+            else:
+                # Fallback, retorna o texto sem a última chave
+                return texto_sem_fim
+
+        
+        # --- 1. Processa o PRIMEIRO conjunto (retorna o RTF completo) ---
+        dados_gerais_0, pontos_0 = todos_conjuntos[0]
+        try:
+            # O primeiro bloco é gerado com o RTF completo, incluindo o cabeçalho/rodapé
+            texto_base_processado = processar_rtf_string_content(caminho_modelo, dados_gerais_0, pontos_0, ignorar_confrontante_repetido)
+        except Exception as e:
+            raise Exception(f"Falha fatal ao processar o Bloco 1 (RTF): {e}")
+
+        
+        # 2. Separa o cabeçalho/corpo do rodapé (chave de fechamento) do PRIMEIRO bloco
+        match_end = re.search(r'\}\s*$', texto_base_processado.strip())
+        if match_end:
+            texto_final_corpo = texto_base_processado[:match_end.start()]
+            rodape_rtf = match_end.group(0).strip() # Deve ser '}'
+        else:
+            texto_final_corpo = texto_base_processado
+            rodape_rtf = '}'
+            print("AVISO: Chave de fechamento RTF ('}') não encontrada. Tentando adicionar '}'.")
+
+
+        # --- 3. Processa os conjuntos subsequentes (índice 1 em diante) ---
+        if len(todos_conjuntos) > 1:
+            for idx in range(1, len(todos_conjuntos)):
+                item_conjunto = todos_conjuntos[idx]
                 
-        # Salva o arquivo RTF final
+                if not (isinstance(item_conjunto, (list, tuple)) and len(item_conjunto) == 2):
+                    print(f"ERRO GRAVE DE DADOS (BLOCO {idx + 1}): Estrutura corrompida. O processo continuará.")
+                    continue
+                
+                dados_gerais, pontos = item_conjunto
+
+                try:
+                    print(f"DEBUG: Anexando Bloco RTF {idx + 1}...")
+                    
+                    # Gera o RTF completo para o bloco
+                    texto_memorial_completo = processar_rtf_string_content(caminho_modelo, dados_gerais, pontos, ignorar_confrontante_repetido)
+
+                    # Extrai apenas o corpo (remove {\rtf1...} e })
+                    corpo_bloco = extrair_corpo_rtf(texto_memorial_completo)
+                    
+                    if corpo_bloco:
+                        # Adiciona quebra de página RTF (\page), quebra de parágrafo (\par) e o corpo do bloco
+                        # \pard reseta a formatação do parágrafo anterior
+                        texto_final_corpo += r'\pard\page\par ' + corpo_bloco
+                    else:
+                        print(f"AVISO: Corpo RTF vazio ou não detectado no Bloco {idx + 1}. Pulando a anexação.")
+
+                except Exception as e:
+                    print(f"ERRO: Falha ao anexar o Bloco {idx + 1} (RTF). Detalhes: {e}. O processo continuará.")
+                
+        # 4. Monta o arquivo RTF final e salva.
+        texto_final_envelopado = texto_final_corpo + "\n" + rodape_rtf
+        
         with open(saida_caminho, 'w', encoding='windows-1252', errors='replace') as f:
-            f.write(texto_final)
+            f.write(texto_final_envelopado)
             
         print(f"DEBUG: Arquivo final RTF salvo em: {saida_caminho}")
         return
@@ -567,11 +666,10 @@ def processar_modelo(caminho_modelo, todos_conjuntos, saida_caminho, ignorar_con
         if len(todos_conjuntos) > 1:
             for idx in range(1, len(todos_conjuntos)):
                 
-                # --- VERIFICAÇÃO DE DADOS (ISOLAR O ERRO too many values to unpack) ---
                 item_conjunto = todos_conjuntos[idx]
                 
                 if not (isinstance(item_conjunto, (list, tuple)) and len(item_conjunto) == 2):
-                    print(f"ERRO GRAVE DE DADOS (BLOCO {idx + 1}): Estrutura corrompida. Esperado 2 elementos (dict, list), encontrado {len(item_conjunto) if isinstance(item_conjunto, (list, tuple)) else 'tipo inválido'}. O processo continuará.")
+                    print(f"ERRO GRAVE DE DADOS (BLOCO {idx + 1}): Estrutura corrompida. O processo continuará.")
                     continue
                 
                 dados_gerais, pontos = item_conjunto
@@ -579,9 +677,7 @@ def processar_modelo(caminho_modelo, todos_conjuntos, saida_caminho, ignorar_con
                 if not dados_gerais and not pontos:
                     print(f"AVISO: Bloco {idx + 1} vazio. Pulando.")
                     continue
-                # --- FIM DA VERIFICAÇÃO DE DADOS ---
 
-                
                 try:
                     print(f"DEBUG: Anexando Bloco {idx + 1} no DOCX.")
                     
@@ -594,12 +690,11 @@ def processar_modelo(caminho_modelo, todos_conjuntos, saida_caminho, ignorar_con
                     # CÓPIA SEGURA DO CONTEÚDO
                     elementos_do_bloco = list(documento_bloco.element.body)
 
-                    # Se houver somente 1 elemento (ou nenhum), faz a cópia segura do que existir
-                    if len(elementos_do_bloco) <= 1:
-                        itens_para_copiar = elementos_do_bloco
-                    else:
-                        # evita o último elemento que costuma conter seção/sectionProperties
+                    # Tenta evitar o último elemento, que costuma ser sectionProperties e pode causar erro
+                    if len(elementos_do_bloco) > 1 and elementos_do_bloco[-1].tag.endswith('sectPr'):
                         itens_para_copiar = elementos_do_bloco[:-1]
+                    else:
+                        itens_para_copiar = elementos_do_bloco
 
                     for elemento in itens_para_copiar:
                         # deepcopy do elemento _element (lxml element) e anexa ao body do documento final
@@ -689,7 +784,7 @@ def main():
     ignorar_rep = args.x
     
     if args.modelo and Path(args.modelo).suffix.lower() == '.docx' and Document is MockDocument:
-            print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX NÃO funcionará.", file=sys.stderr)
+             print("AVISO: 'python-docx' não está instalado. O processamento de arquivos DOCX NÃO funcionará.", file=sys.stderr)
 
     try:
         # --- MODO SIMPLIFICADO (Modelo e CSV_BASE) ---
