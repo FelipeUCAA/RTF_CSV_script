@@ -368,11 +368,24 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
         
         texto_depois_final = texto_depois[:]
         
-        # 1. Substitui dados do ÚLTIMO ponto (Azimute, Distância, Confrontante)
-        for key, value in last_point_of_perimeter.items():
-            # A chave <PONTO> aqui é a do último ponto, mas será sobrescrita abaixo
+       # --- FECHAMENTO CORRETO (último → primeiro) ---
+
+        fechamento_data = {}
+
+        # Dados geométricos vêm do ÚLTIMO ponto
+        fechamento_data.update(last_point_of_perimeter)
+
+        # Sobrescreve o ponto de destino (volta ao início)
+        fechamento_data['<PONTO>'] = first_point.get('<PONTO>', '')
+
+        # Coordenadas do ponto inicial
+        fechamento_data['<UTMX>'] = first_point.get('<UTMX>', '')
+        fechamento_data['<UTMY>'] = first_point.get('<UTMY>', '')
+
+        # Aplica substituições
+        for key, value in fechamento_data.items():
             texto_depois_final = texto_depois_final.replace(key, str(value))
-        
+
         # 2. Substitui <PONTO> (deve ser o ponto de partida M01)
         texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
 
