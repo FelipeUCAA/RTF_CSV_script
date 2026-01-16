@@ -238,8 +238,22 @@ def replace_placeholder_in_paragraph(paragraph, placeholder, replacement):
                 p = paragraph._element
                 r = paragraph.runs[i]._element
                 p.remove(r)
-
-
+                
+def aplicar_estilo_base(run_alvo, run_origem):
+    """Copia fonte, tamanho e negrito de uma run para outra."""
+    run_alvo.font.name = run_origem.font.name if run_origem.font.name else "Arial"
+    if run_origem.font.size:
+        run_alvo.font.size = run_origem.font.size
+    run_alvo.bold = run_origem.bold
+    
+def replace_placeholder_docx(paragrafo, dados):
+    """Substitui placeholders mantendo a formatação de cada run individualmente."""
+    for chave, valor in dados.items():
+        if chave in paragrafo.text:
+            for run in paragrafo.runs:
+                if chave in run.text:
+                    run.text = run.text.replace(chave, str(valor))
+                    
 def substituir_texto_em_docx(estrutura, dados_substituicao):
     """
     Aplica as substituições em todos os parágrafos e tabelas da estrutura fornecida
@@ -276,7 +290,8 @@ def criar_padrao_rtf_flexivel(texto_alvo):
 
 def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confrontante_repetido=False):
     """
-    Processa um ÚNICO memorial RTF e retorna a STRING do conteúdo.
+    Processa um ÚNICO memorial RTF e retorna a STRING do conteúdo, 
+    garantindo que os nomes dos pontos (<PONTO>) fiquem em negrito.
     """
     try:
         # Tenta ler o RTF com uma codificação segura
@@ -285,8 +300,9 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
         if not texto_modelo:
             raise ValueError("O arquivo modelo RTF está vazio ou não pôde ser lido.")
         
-        # 0. Normalização das chaves do template (para aguentar chaves quebradas por formatação)
+        # 0. Normalização das chaves do template
         chaves_a_normalizar = list(dados_gerais.keys()) + list(pontos[0].keys() if pontos else []) + ['<***>', '<CONFRO>']
+        # Nota: Assume-se que a função normalizar_chaves_rtf existe no escopo global
         texto_pronto = normalizar_chaves_rtf(texto_modelo, chaves_a_normalizar)
         
         # 1. Substitui dados gerais (em todo o documento)
@@ -298,9 +314,12 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
         match_bloco = re.search(padrao_bloco, texto_pronto)
 
         if not match_bloco or len(pontos) < 2:
-            # Caso não haja bloco de repetição ou pontos suficientes, remove a chave de bloco
             texto_pronto = texto_pronto.replace('<***>', '')
-            return texto_pronto # Retorna o bloco simples
+            # Aplica negrito no PONTO inicial mesmo se não houver bloco
+            if pontos:
+                ponto_nome = pontos[0].get('<PONTO>', '')
+                texto_pronto = texto_pronto.replace('<PONTO>', f"{{\\b {ponto_nome}}}")
+            return texto_pronto
 
         # Separar o texto em partes
         texto_antes = texto_pronto[:match_bloco.start()]
@@ -308,16 +327,19 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
         texto_depois = texto_pronto[match_bloco.end():]
         blocos_gerados = []
         
-        # --- ABERTURA: substitui variáveis do primeiro ponto (M01) no texto antes do bloco ---
-        # Isso garante que a descrição inicial do M01 seja preenchida corretamente
+        # --- ABERTURA: ponto inicial (M01) ---
         first_point = pontos[0]
         for key, value in first_point.items():
-            texto_antes = texto_antes.replace(key, str(value))
+            val_to_replace = value
+            if key == '<PONTO>':
+                # Formatação RTF para Negrito: {\b texto}
+                val_to_replace = f"{{\\b {value}}}"
+            texto_antes = texto_antes.replace(key, str(val_to_replace))
 
-        # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO ---
+        # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO (BLOCO DE REPETIÇÃO) ---
         last_confrontante = None
+        # Nota: Assume-se que criar_padrao_rtf_flexivel existe no escopo global
         frase_alvo_rtf = " confrontando com a propriedade de <CONFRONTANTE>"
-        # O padrão é usado para encontrar e remover a frase RTF, ignorando códigos de formatação.
         padrao_remover_frase = criar_padrao_rtf_flexivel(frase_alvo_rtf) + r'\s*[,\.]*'
 
         for idx in range(len(pontos) - 1):
@@ -328,19 +350,21 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
             formatted_block = bloco_base[:]
             paragraph_data = current_point.copy()
             
-            # Adiciona os dados do ponto de destino para substituição
+            # Formata o ponto de destino em negrito para o RTF
+            ponto_destino_nome = next_point.get('<PONTO>', '')
+            ponto_destino_negrito = f"{{\\b {ponto_destino_nome}}}"
+
             paragraph_data.update({
-                '<PONTO>': next_point.get('<PONTO>', ''),
-                # Inverte UTM, se o modelo for baseado em UTM. Mantido do original.
-                '<UTMX>': next_point.get('<UTMY>', ''),
+                '<PONTO>': ponto_destino_negrito,
+                '<UTMX>': next_point.get('<UTMY>', ''), # Mantendo lógica de inversão do original
                 '<UTMY>': next_point.get('<UTMX>', ''),
             })
+            
             current_confrontante_name = current_point.get('<CONFRONTANTE>', '').strip()
             
             # Tratamento de Confrontante Repetido
             if ignorar_confrontante_repetido: 
                 if current_confrontante_name and current_confrontante_name == last_confrontante:
-                    # Remove a frase inteira "confrontando com a propriedade de <CONFRONTANTE>" do RTF
                     formatted_block, subs = re.subn(padrao_remover_frase, "", formatted_block, flags=re.IGNORECASE | re.DOTALL)
                     if subs > 0:
                         paragraph_data['<CONFRONTANTE>'] = ""
@@ -361,207 +385,184 @@ def processar_rtf_string_content(modelo_rtf, dados_gerais, pontos, ignorar_confr
 
             blocos_gerados.append(formatted_block)
 
-        # --- FECHAMENTO: usa substituição de placeholder no texto_depois ---
+        # --- FECHAMENTO: (último → primeiro) ---
         last_point_of_perimeter = pontos[-1]
         first_point = pontos[0]
         confronto_num_fechamento = len(pontos) 
         
         texto_depois_final = texto_depois[:]
-        
-       # --- FECHAMENTO CORRETO (último → primeiro) ---
+        fechamento_data = last_point_of_perimeter.copy()
 
-        fechamento_data = {}
+        # Ponto de destino final (volta ao início) em negrito
+        ponto_inicio_nome = first_point.get('<PONTO>', '')
+        ponto_inicio_negrito = f"{{\\b {ponto_inicio_nome}}}"
 
-        # Dados geométricos vêm do ÚLTIMO ponto
-        fechamento_data.update(last_point_of_perimeter)
-
-        # Sobrescreve o ponto de destino (volta ao início)
-        fechamento_data['<PONTO>'] = first_point.get('<PONTO>', '')
-
-        # Coordenadas do ponto inicial
+        fechamento_data['<PONTO>'] = ponto_inicio_negrito
         fechamento_data['<UTMX>'] = first_point.get('<UTMX>', '')
         fechamento_data['<UTMY>'] = first_point.get('<UTMY>', '')
 
-        # Aplica substituições
+        # Aplica substituições no fechamento
         for key, value in fechamento_data.items():
             texto_depois_final = texto_depois_final.replace(key, str(value))
 
-        # 2. Substitui <PONTO> (deve ser o ponto de partida M01)
-        texto_depois_final = texto_depois_final.replace('<PONTO>', first_point.get('<PONTO>', ''))
-
-        # 3. Substitui a chave de Confronto Final (se existir)
         if '<CONFRO>' in texto_depois_final:
             texto_depois_final = texto_depois_final.replace('<CONFRO>', f"Confronto {confronto_num_fechamento}")
             
-        # 4. Monta o texto final
+        # Monta o texto final
         texto_final = texto_antes + "".join(blocos_gerados) + texto_depois_final
         return texto_final
 
     except Exception as e:
-        # Lançar exceção para ser tratada no orquestrador
         raise Exception(f"Erro ao processar o bloco RTF. Detalhes: {e}")
-
-def processar_docx_bloco(caminho_modelo, dados_gerais, pontos, ignorar_confrontante_repetido=False):
-    """
-    Processa um ÚNICO memorial DOCX em uma nova instância do modelo.
-    Retorna o objeto Document pronto.
-    """
-    documento = Document(caminho_modelo)
     
-    # 2. Substitui apenas os dados gerais (em todo o documento)
-    substituir_texto_em_docx(documento, dados_gerais)
+def processar_docx_bloco(caminho, dados_gerais, pontos, ignorar_rep=False):
+    doc = Document(caminho)
+    substituir_texto_em_docx(doc, dados_gerais)
 
-    # 3. Encontra e processa o bloco de repetição
-    paragrafo_bloco_inicio = None
-    start_index = -1
-    end_index = -1
-    
-    for i, p in enumerate(documento.paragraphs):
+    start_idx = -1
+    end_idx = -1
+    for i, p in enumerate(doc.paragraphs):
         if "<***>" in p.text:
-            start_index = i
-            paragrafo_bloco_inicio = p
-            break
-    
-    if start_index != -1:
-        for i in range(start_index, len(documento.paragraphs)):
-            p = documento.paragraphs[i]
-            # Tenta encontrar o final do bloco, que pode estar no mesmo parágrafo ou no próximo
-            if p.text.count('<***>') >= 2 or (i > start_index and '<***>' in p.text):
-                end_index = i
-                break
+            if start_idx == -1: start_idx = i
+            end_idx = i
 
-    # Se não há bloco de repetição válido
-    if start_index == -1 or end_index == -1 or len(pontos) < 2:
-        if paragrafo_bloco_inicio:
-            paragrafo_bloco_inicio.text = paragrafo_bloco_inicio.text.replace("<***>", "")
-        
-        # Subsituição de fechamento simples
-        final_substitutions = dados_gerais.copy()
-        if pontos:
-             final_substitutions.update(pontos[0].copy())
-        substituir_texto_em_docx(documento, final_substitutions)
-        return documento
-        
-    # 3b. Extrair o Bloco Base de repetição
-    block_text_raw = ""
-    paragraphs_to_remove = []
-    
-    for i in range(start_index, end_index + 1):
-        p = documento.paragraphs[i]
-        block_text_raw += p.text + "\n"
-        paragraphs_to_remove.append(p)
-        
-    padrao_bloco = r"(?s)<\*\*\*>(.*?)<\*\*\*>"
-    match_bloco = re.search(padrao_bloco, block_text_raw)
-    
-    if not match_bloco:
-        raise Exception("Erro fatal ao extrair o conteúdo do bloco de repetição.")
-    
-    bloco_base_string = match_bloco.group(1).replace('<***>', '').strip()
-    
-    # --- GERAÇÃO DOS PARÁGRAFOS DE TRANSIÇÃO (Lógica de String Original) ---
-    blocos_gerados = []
-    ultimo_confrontante = None
+    if start_idx == -1 or len(pontos) < 2:
+        for p in doc.paragraphs: replace_placeholder_docx(p, {"<***>": ""})
+        return doc
 
-    for idx in range(len(pontos) - 1):
-        ponto_atual = pontos[idx]
-        proximo_ponto = pontos[idx + 1]
-        numero_confronto = idx + 1
-
-        bloco_formatado = bloco_base_string[:]
-        dados_paragrafo = ponto_atual.copy()
-        dados_paragrafo.update({
-            '<PONTO>': proximo_ponto.get('<PONTO>', ''),
-            '<UTMX>': proximo_ponto.get('<UTMY>', ''),
-            '<UTMY>': proximo_ponto.get('<UTMX>', ''),
-        })
-        confrontante_real = ponto_atual.get('<CONFRONTANTE>', '').strip()
-        padrao_remover_frase = r"\s*confrontando\s*com\s*a\s*propriedade\s*de\s*<CONFRONTANTE>\s*[,\.]*"
-
-        # --- TRATAMENTO: confrontante repetido ---
-        if ignorar_confrontante_repetido:
-            if confrontante_real and confrontante_real == ultimo_confrontante:
-                bloco_formatado, subs = re.subn(padrao_remover_frase, "", bloco_formatado, flags=re.IGNORECASE)
-                dados_paragrafo['<CONFRONTANTE>'] = "" if subs > 0 else "o mesmo"
-            else:
-                dados_paragrafo['<CONFRONTANTE>'] = confrontante_real
-            ultimo_confrontante = confrontante_real
-        else:
-            dados_paragrafo['<CONFRONTANTE>'] = confrontante_real
-
-        token_ponto = "@@PONTO_NEGRITO@@"
-        bloco_formatado_sem_ponto = bloco_formatado.replace('<PONTO>', token_ponto)
-        
-        for chave, valor in dados_paragrafo.items():
-            if chave == '<PONTO>': continue 
-            bloco_formatado_sem_ponto = bloco_formatado_sem_ponto.replace(chave, str(valor))
-
-        if '<CONFRO>' in bloco_formatado_sem_ponto: 
-            bloco_formatado_sem_ponto = bloco_formatado_sem_ponto.replace("<CONFRO>", f"Confronto {numero_confronto}")
-
-        blocos_gerados.append(bloco_formatado_sem_ponto)
+    # --- IDENTIFICAÇÃO DOS TEMPLATES ---
+    p_intro = doc.paragraphs[start_idx]
+    p_outro = doc.paragraphs[end_idx]
     
-    # 4. Inserção dos Blocos e Limpeza
-    paragrafo_ref = paragraphs_to_remove[0] if paragraphs_to_remove else paragrafo_bloco_inicio
-    estilo_referencia = paragrafo_ref.style
-    
-    # Tenta inferir formatação base
-    run_ref = next((r for r in paragrafo_ref.runs if r.text.strip()), None) or (paragrafo_ref.runs[-1] if paragrafo_ref.runs else None)
-    font_ref = run_ref.font.name if run_ref and run_ref.font.name else "Arial" 
-    size_ref = run_ref.font.size if run_ref and run_ref.font.size else None
-    bold_ref = run_ref.bold if run_ref else False
-    
-    paragrafo_ancora = documento.paragraphs[end_index] 
-    
-    for idx, bloco_texto_sem_ponto in enumerate(blocos_gerados):
-        if bloco_texto_sem_ponto.strip():
-            proximo_ponto_nome = pontos[idx + 1].get('<PONTO>', '')
-            novo_paragrafo = paragrafo_ancora.insert_paragraph_before('') 
-            novo_paragrafo.style = estilo_referencia
+    font_name = p_intro.runs[0].font.name if p_intro.runs else "Arial"
+    font_size = p_intro.runs[0].font.size if p_intro.runs else Pt(11)
 
-            def apply_base_format(r):
-                # Tenta copiar a formatação base, mas garante o nome da fonte
-                r.font.name = font_ref
-                if size_ref: r.font.size = size_ref
-                # Se a run de referência era negrito, aplica a todas as runs de conteúdo
-                if bold_ref: r.bold = bold_ref
-                return r
+    # Captura o texto do bloco de repetição
+    bloco_raw = ""
+    for i in range(start_idx, end_idx + 1):
+        bloco_raw += doc.paragraphs[i].text + "\n"
+    match = re.search(r"(?s)<\*\*\*>(.*?)<\*\*\*>", bloco_raw)
+    bloco_template_txt = match.group(1).strip() if match else ""
+
+    # --- 1. PROCESSAMENTO DA ABERTURA (Especial para P1 e P2 em negrito) ---
+    
+    val_p1 = str(pontos[0].get('<PONTO>', ''))
+    val_n1 = str(pontos[0].get('<UTMY>', ''))
+    val_e1 = str(pontos[0].get('<UTMX>', ''))
+    
+    val_p2 = str(pontos[1].get('<PONTO>', ''))
+    val_n2 = str(pontos[1].get('<UTMY>', ''))
+    val_e2 = str(pontos[1].get('<UTMX>', ''))
+
+    # Divide o parágrafo de introdução pelo marcador de repetição
+    partes_intro_raw = p_intro.text.split("<***>")
+    part_a_txt = partes_intro_raw[0]
+    part_b_txt = partes_intro_raw[1] if len(partes_intro_raw) > 1 else ""
+
+    # Substitui dados na Parte A (P1)
+    for k, v in pontos[0].items(): part_a_txt = part_a_txt.replace(k, str(v))
+    part_a_txt = part_a_txt.replace("< PONTO>", val_p1)
+    part_a_txt = re.sub(r'<\s*UTMY\s*>', val_n1, part_a_txt)
+    part_a_txt = re.sub(r'<\s*UTMX\s*>', val_e1, part_a_txt)
+
+    # Substitui dados na Parte B (P2)
+    dados_p2 = pontos[0].copy()
+    dados_p2.update({'<PONTO>': val_p2, '<UTMY>': val_n2, '<UTMX>': val_e2})
+    for k, v in dados_p2.items(): part_b_txt = part_b_txt.replace(k, str(v))
+    part_b_txt = part_b_txt.replace("< PONTO>", val_p2)
+    part_b_txt = re.sub(r'<\s*UTMY\s*>', val_n2, part_b_txt)
+    part_b_txt = re.sub(r'<\s*UTMX\s*>', val_e2, part_b_txt)
+
+    # Limpa e reconstrói o parágrafo com estilos
+    p_intro.clear()
+
+    def add_styled_runs(para, text, p_val, n_val, e_val):
+        # Regex para capturar os valores que devem ser negrito
+        # Inclui o nome do ponto e as coordenadas com prefixos N e E
+        regex_bold = f"({re.escape(p_val)}|N\s*=?\s*{re.escape(n_val)}|E\s*=?\s*{re.escape(e_val)})"
+        segs = re.split(regex_bold, text)
+        for s in segs:
+            if not s: continue
+            r = para.add_run(s)
+            r.font.name = font_name
+            r.font.size = font_size
+            # Verifica se o segmento atual é um dos valores de destaque
+            if s == p_val or (s.startswith('N') and n_val in s) or (s.startswith('E') and e_val in s):
+                r.bold = True
+
+    add_styled_runs(p_intro, part_a_txt, val_p1, val_n1, val_e1)
+    if part_b_txt:
+        add_styled_runs(p_intro, part_b_txt, val_p2, val_n2, val_e2)
+
+    # --- 2. PROCESSAMENTO DAS REPETIÇÕES (PONTOS INTERMEDIÁRIOS) ---
+    ancora = p_outro
+    ultimo_conf = None
+    if len(pontos) > 2:
+        for i in range(1, len(pontos) - 1):
+            p_at = pontos[i]
+            p_pr = pontos[i+1]
+            txt_bloco = bloco_template_txt[:]
             
-            partes = bloco_texto_sem_ponto.split(token_ponto)
+            v_p = str(p_pr.get('<PONTO>', ''))
+            v_n = str(p_pr.get('<UTMY>', ''))
+            v_e = str(p_pr.get('<UTMX>', ''))
+
+            # Substitui chaves comuns
+            for k, v in p_at.items():
+                if k not in ['<PONTO>', '<UTMX>', '<UTMY>']:
+                    txt_bloco = txt_bloco.replace(k, str(v))
+            txt_bloco = txt_bloco.replace("<CONFRO>", f"Confronto {i+1}")
+
+            # Identifica tokens de negrito no template
+            txt_bloco = re.sub(r'<\s*PONTO\s*>', '##B_P##', txt_bloco, flags=re.I)
+            txt_bloco = re.sub(r'<\s*UTMY\s*>', '##B_N##', txt_bloco, flags=re.I)
+            txt_bloco = re.sub(r'<\s*UTMX\s*>', '##B_E##', txt_bloco, flags=re.I)
+
+            p_n = ancora.insert_paragraph_before("")
+            p_n.style = p_intro.style
             
-            if len(partes) > 0:
-                run = novo_paragrafo.add_run(partes[0])
-                apply_base_format(run)
+            partes = re.split(r'([NE]\s*=?\s*##B_[NE]##|##B_P##)', txt_bloco)
+            for pt in partes:
+                if not pt: continue
+                r = p_n.add_run()
+                r.font.name = font_name
+                r.font.size = font_size
+                if "##B_P##" in pt:
+                    r.text = pt.replace("##B_P##", v_p); r.bold = True
+                elif "##B_N##" in pt:
+                    r.text = pt.replace("##B_N##", v_n); r.bold = True
+                elif "##B_E##" in pt:
+                    r.text = pt.replace("##B_E##", v_e); r.bold = True
+                else:
+                    r.text = pt
 
-            if len(partes) > 1:
-                run = novo_paragrafo.add_run(proximo_ponto_nome)
-                run.bold = True
-                run.font.name = font_ref
-                if size_ref: run.font.size = size_ref
-                run = novo_paragrafo.add_run(partes[1])
-                apply_base_format(run)
+    # --- 3. PROCESSAMENTO DO FECHAMENTO ---
+    for run in p_outro.runs:
+        if "<***>" in run.text: run.text = run.text.replace("<***>", "")
     
-    # 4b. Remoção dos parágrafos do bloco de repetição
-    for p_remove in paragraphs_to_remove:
-        if p_remove._element.getparent() is not None:
-            p_remove._element.getparent().remove(p_remove._element)
+    v_p_f = str(pontos[0].get('<PONTO>', ''))
+    v_n_f = str(pontos[0].get('<UTMY>', ''))
+    v_e_f = str(pontos[0].get('<UTMX>', ''))
 
-
-    # 4c. TRATAMENTO DO FECHAMENTO (DOCX)
-    # Garante que os placeholders restantes (geralmente no final) sejam preenchidos
-    last_point_of_perimeter = pontos[-1]
-    first_point_name = pontos[0].get('<PONTO>', '')
-    closing_data = last_point_of_perimeter.copy()
-    closing_data['<PONTO>'] = first_point_name 
-    closing_data['<CONFRO>'] = f"Confronto {len(pontos)}"
-
-    final_substitutions = dados_gerais.copy()
-    final_substitutions.update(pontos[0].copy())
-    final_substitutions.update(closing_data)
+    d_f = pontos[-1].copy()
+    d_f.update({'<PONTO>': v_p_f, '<UTMX>': v_e_f, '<UTMY>': v_n_f, '<CONFRO>': f"Confronto {len(pontos)}"})
+    replace_placeholder_docx(p_outro, d_f)
     
-    substituir_texto_em_docx(documento, final_substitutions)
+    # Aplica negrito manual no fechamento para garantir P1
+    for run in p_outro.runs:
+        if v_p_f in run.text or v_n_f in run.text or v_e_f in run.text:
+            run.bold = True
+
+    if end_idx > start_idx + 1:
+        for i in range(end_idx - 1, start_idx, -1):
+            p_m = doc.paragraphs[i]
+            p_m._element.getparent().remove(p_m._element)
+
+    final_subs = dados_gerais.copy()
+    final_subs.update(pontos[0])
+    substituir_texto_em_docx(doc, final_subs)
     
-    return documento
+    return doc
     
     
 def processar_modelo(caminho_modelo, todos_conjuntos, saida_caminho, ignorar_confrontante_repetido=False):
